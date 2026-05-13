@@ -422,6 +422,7 @@ public class DeploymentService extends GreengrassService {
             logger.atInfo().kv(DEPLOYMENT_ID_LOG_KEY_NAME, currentDeploymentTaskMetadata.getDeploymentId())
                     .kv(GG_DEPLOYMENT_ID_LOG_KEY_NAME, ggDeploymentId).log("Deployment task is cancelled");
         }
+
         // Setting this to null to indicate there is no current deployment being processed
         // Did not use optionals over null due to performance
         currentDeploymentTaskMetadata = null;

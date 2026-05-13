@@ -6,6 +6,7 @@
 package com.aws.greengrass.deployment;
 
 
+import com.aws.greengrass.config.Topic;
 import com.aws.greengrass.config.Topics;
 import com.aws.greengrass.dependency.Context.Value;
 import com.aws.greengrass.dependency.State;
@@ -227,6 +228,10 @@ public class DeploymentConfigMerger {
         logger.atInfo(MERGE_CONFIG_EVENT_KEY).kv("deployment", deploymentId)
                 .log("Applying deployment changes");
         activator.activate(newConfig, deployment, configMergeTimestamp, totallyCompleteFuture);
+
+        // After activation completes (synchronously), report terminal status to source account
+        // if this was an endpoint-switch deployment. The future is already completed at this point.
+        reportToSourceAccountIfEndpointSwitch(deployment, totallyCompleteFuture);
     }
 
     private boolean validateNucleusConfig(CompletableFuture<DeploymentResult> totallyCompleteFuture,
@@ -245,6 +250,80 @@ public class DeploymentConfigMerger {
             }
         }
         return true;
+    }
+
+    /**
+     * After an endpoint-switch deployment completes, report terminal status to the source account
+     * via a standalone MQTT connection. Only reports for SUCCEEDED and FAILED_UNABLE_TO_ROLLBACK —
+     * for other terminal statuses the main MQTT client is still on the source endpoint and the
+     * existing status reporting flow handles it.
+     *
+     * <p>This is best-effort: failure to report is logged but does not affect device state.
+     * The source deployment will time out.</p>
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void reportToSourceAccountIfEndpointSwitch(Deployment deployment,
+                                                       CompletableFuture<DeploymentResult> future) {
+        DeploymentService deploymentService = kernel.getContext().get(DeploymentService.class);
+        Topic sourceEndpointTopic = deploymentService.getRuntimeConfig()
+                .find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY);
+        if (sourceEndpointTopic == null) {
+            return;
+        }
+        String sourceEndpoint = Coerce.toString(sourceEndpointTopic);
+        if (sourceEndpoint == null || sourceEndpoint.isEmpty()) {
+            return;
+        }
+
+        // Read and clear — prevents re-reporting on restart
+        sourceEndpointTopic.remove();
+
+        if (!future.isDone()) {
+            return;
+        }
+        DeploymentResult result;
+        try {
+            result = future.get();
+        } catch (Exception e) {
+            logger.atDebug().setCause(e).log("Could not read deployment result for source-account report");
+            return;
+        }
+        if (result == null) {
+            return;
+        }
+
+        DeploymentResult.DeploymentStatus status = result.getDeploymentStatus();
+        boolean needsStandaloneReport = DeploymentResult.DeploymentStatus.SUCCESSFUL.equals(status)
+                || DeploymentResult.DeploymentStatus.FAILED_UNABLE_TO_ROLLBACK.equals(status);
+        if (!needsStandaloneReport) {
+            logger.atDebug().kv("status", status)
+                    .log("Endpoint-switch rolled back or had no state change; main MQTT handles reporting");
+            return;
+        }
+
+        Map<String, String> statusDetails = new HashMap<>();
+        statusDetails.put(DeploymentService.DEPLOYMENT_DETAILED_STATUS_KEY, status.name());
+
+        try {
+            if (Deployment.DeploymentType.IOT_JOBS.equals(deployment.getDeploymentType())) {
+                String jobStatus = DeploymentResult.DeploymentStatus.SUCCESSFUL.equals(status)
+                        ? "SUCCEEDED" : "FAILED";
+                kernel.getContext().get(IotJobsHelper.class).reportStatusToSourceEndpoint(
+                        sourceEndpoint, deployment.getId(),
+                        software.amazon.awssdk.iot.iotjobs.model.JobStatus.valueOf(jobStatus),
+                        new HashMap<>(statusDetails));
+            } else if (Deployment.DeploymentType.SHADOW.equals(deployment.getDeploymentType())) {
+                String shadowStatus = DeploymentResult.DeploymentStatus.SUCCESSFUL.equals(status)
+                        ? "SUCCEEDED" : "FAILED";
+                kernel.getContext().get(ShadowDeploymentListener.class).reportStatusToSourceEndpoint(
+                        sourceEndpoint, deployment.getConfigurationArn(), shadowStatus, statusDetails);
+            } else {
+                logger.atDebug().kv("type", deployment.getDeploymentType())
+                        .log("No standalone reporter for deployment type");
+            }
+        } catch (Exception e) {
+            logger.atWarn().setCause(e).log("Failed to report terminal status to source account");
+        }
     }
 
     /**

@@ -7,6 +7,7 @@ package com.aws.greengrass.deployment;
 
 import com.aws.greengrass.config.WhatHappened;
 import com.aws.greengrass.dependency.InjectionActions;
+import com.aws.greengrass.deployment.exceptions.DeploymentException;
 import com.aws.greengrass.deployment.exceptions.DeviceConfigurationException;
 import com.aws.greengrass.deployment.model.Deployment;
 import com.aws.greengrass.deployment.model.Deployment.DeploymentType;
@@ -17,7 +18,10 @@ import com.aws.greengrass.lifecyclemanager.exceptions.ServiceLoadException;
 import com.aws.greengrass.logging.api.Logger;
 import com.aws.greengrass.logging.impl.LogManager;
 import com.aws.greengrass.mqttclient.MqttClient;
+import com.aws.greengrass.mqttclient.StandaloneMqttConnector;
 import com.aws.greengrass.mqttclient.WrapperMqttClientConnection;
+import com.aws.greengrass.security.SecurityService;
+import com.aws.greengrass.security.exceptions.MqttConnectionProviderException;
 import com.aws.greengrass.status.FleetStatusService;
 import com.aws.greengrass.status.model.Trigger;
 import com.aws.greengrass.util.Coerce;
@@ -46,6 +50,7 @@ import software.amazon.awssdk.iot.iotjobs.model.RejectedError;
 import software.amazon.awssdk.iot.iotjobs.model.UpdateJobExecutionRequest;
 import software.amazon.awssdk.iot.iotjobs.model.UpdateJobExecutionSubscriptionRequest;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -112,6 +117,10 @@ public class IotJobsHelper implements InjectionActions {
     @Setter
     @Inject
     private DeviceConfiguration deviceConfiguration;
+
+    @Setter
+    @Inject
+    private SecurityService securityService;
 
     @Inject
     private IotJobsClientFactory iotJobsClientFactory;
@@ -661,6 +670,48 @@ public class IotJobsHelper implements InjectionActions {
             }
         } catch (ServiceLoadException e) {
             logger.atError().setCause(e).log("Failed to find deployment service");
+        }
+    }
+
+    /**
+     * Report terminal deployment status to the source account via a standalone MQTT connection.
+     * Used after an endpoint switch when the main MQTT client is connected to the destination account
+     * and cannot reach the source account's IoT Jobs topic.
+     *
+     * <p>This method is best-effort: all exceptions are caught and logged as warnings.
+     * Failure to report does not affect device state — the source deployment will time out.</p>
+     *
+     * @param sourceEndpoint the IoT data endpoint of the source account
+     * @param jobId          the IoT Job ID to update
+     * @param status         terminal job status (SUCCEEDED or FAILED)
+     * @param statusDetails  status detail map
+     */
+    public void reportStatusToSourceEndpoint(String sourceEndpoint, String jobId, JobStatus status,
+                                             Map<String, String> statusDetails) {
+        String thing = Coerce.toString(deviceConfiguration.getThingName());
+        String topic = String.format("$aws/things/%s/jobs/%s/update", thing, jobId);
+        try {
+            HashMap<String, Object> payload = new HashMap<>();
+            payload.put("status", status.toString());
+            payload.put("statusDetails", statusDetails);
+            payload.put("thingName", thing);
+            payload.put("jobId", jobId);
+            byte[] payloadBytes = SerializerFactory.getFailSafeJsonObjectMapper()
+                    .writeValueAsBytes(payload);
+
+            try (StandaloneMqttConnector connector = StandaloneMqttConnector.of(
+                    securityService, deviceConfiguration, sourceEndpoint, "-status-report")) {
+                connector.connect(60_000);
+                connector.publish(topic, payloadBytes, QualityOfService.AT_LEAST_ONCE, 60_000);
+            }
+            logger.atInfo().kv("jobId", jobId).kv("status", status)
+                    .kv("sourceEndpoint", sourceEndpoint)
+                    .log("Reported terminal job status to source account");
+        } catch (IOException | DeploymentException
+                 | MqttConnectionProviderException e) {
+            logger.atWarn().kv("jobId", jobId).kv("status", status)
+                    .kv("sourceEndpoint", sourceEndpoint).setCause(e)
+                    .log("Failed to report terminal job status to source account");
         }
     }
 

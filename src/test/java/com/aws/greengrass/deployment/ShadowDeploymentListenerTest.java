@@ -7,31 +7,44 @@ package com.aws.greengrass.deployment;
 
 import com.aws.greengrass.config.ChildChanged;
 import com.aws.greengrass.config.Node;
+import com.aws.greengrass.config.Topic;
 import com.aws.greengrass.config.WhatHappened;
 import com.aws.greengrass.dependency.Context;
+import com.aws.greengrass.deployment.exceptions.DeploymentException;
 import com.aws.greengrass.deployment.exceptions.DeviceConfigurationException;
 import com.aws.greengrass.lifecyclemanager.Kernel;
 import com.aws.greengrass.mqttclient.MqttClient;
+import com.aws.greengrass.mqttclient.StandaloneMqttConnector;
+import com.aws.greengrass.security.SecurityService;
 import com.aws.greengrass.testcommons.testutilities.GGExtension;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.ExtensionContext;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import software.amazon.awssdk.crt.mqtt.QualityOfService;
 import software.amazon.awssdk.iot.iotshadow.IotShadowClient;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static com.aws.greengrass.deployment.DeviceConfiguration.DEVICE_PARAM_IOT_DATA_ENDPOINT;
+import static com.aws.greengrass.testcommons.testutilities.ExceptionLogProtector.ignoreExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -128,5 +141,59 @@ public class ShadowDeploymentListenerTest {
                 .SubscribeToUpdateNamedShadowRejected(any(), any(), any(), any());
         verify(mockIotShadowClient, timeout(1000).times(1))
                 .SubscribeToGetNamedShadowAccepted(any(), any(), any(), any());
+    }
+
+    @Test
+    void GIVEN_source_endpoint_WHEN_report_status_to_source_THEN_connects_publishes_and_closes() throws Exception {
+        SecurityService mockSecurityService = mock(SecurityService.class);
+        shadowDeploymentListener.setSecurityService(mockSecurityService);
+
+        Topic thingNameTopic = mock(Topic.class);
+        when(thingNameTopic.getOnce()).thenReturn("TestThing");
+        when(mockDeviceConfiguration.getThingName()).thenReturn(thingNameTopic);
+
+        try (StandaloneMqttConnector mockConnector = mock(StandaloneMqttConnector.class);
+             MockedStatic<StandaloneMqttConnector> staticMock = mockStatic(StandaloneMqttConnector.class)) {
+            staticMock.when(() -> StandaloneMqttConnector.of(any(), any(), any(), any()))
+                    .thenReturn(mockConnector);
+
+            Map<String, String> statusDetails = new HashMap<>();
+            statusDetails.put("status", "SUCCEEDED");
+            shadowDeploymentListener.reportStatusToSourceEndpoint(
+                    "source.iot.us-east-1.amazonaws.com",
+                    "arn:aws:greengrass:us-east-1:123:config", "SUCCEEDED", statusDetails);
+
+            verify(mockConnector).connect(60_000);
+            verify(mockConnector).publish(
+                    contains("shadow/name/AWSManagedGreengrassV2Deployment/update"),
+                    any(byte[].class), any(QualityOfService.class), eq(60_000L));
+            verify(mockConnector).close();
+        }
+    }
+
+    @Test
+    void GIVEN_source_endpoint_unreachable_WHEN_report_shadow_status_THEN_logs_warning_no_throw(
+            ExtensionContext extContext) throws Exception {
+        ignoreExceptionOfType(extContext, DeploymentException.class);
+
+        SecurityService mockSecurityService = mock(SecurityService.class);
+        shadowDeploymentListener.setSecurityService(mockSecurityService);
+
+        Topic thingNameTopic = mock(Topic.class);
+        when(thingNameTopic.getOnce()).thenReturn("TestThing");
+        when(mockDeviceConfiguration.getThingName()).thenReturn(thingNameTopic);
+
+        try (StandaloneMqttConnector mockConnector = mock(StandaloneMqttConnector.class);
+             MockedStatic<StandaloneMqttConnector> staticMock = mockStatic(StandaloneMqttConnector.class)) {
+            doThrow(new DeploymentException("connect failed")).when(mockConnector).connect(60_000);
+            staticMock.when(() -> StandaloneMqttConnector.of(any(), any(), any(), any()))
+                    .thenReturn(mockConnector);
+
+            Map<String, String> statusDetails = new HashMap<>();
+            // Should not throw
+            shadowDeploymentListener.reportStatusToSourceEndpoint(
+                    "unreachable.iot.us-east-1.amazonaws.com",
+                    "arn:aws:greengrass:us-east-1:123:config", "SUCCEEDED", statusDetails);
+        }
     }
 }

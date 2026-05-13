@@ -8,6 +8,7 @@ package com.aws.greengrass.deployment;
 import com.amazon.aws.iot.greengrass.configuration.common.Configuration;
 import com.aws.greengrass.config.WhatHappened;
 import com.aws.greengrass.dependency.InjectionActions;
+import com.aws.greengrass.deployment.exceptions.DeploymentException;
 import com.aws.greengrass.deployment.exceptions.DeviceConfigurationException;
 import com.aws.greengrass.deployment.model.Deployment;
 import com.aws.greengrass.deployment.model.DeploymentTaskMetadata;
@@ -17,7 +18,10 @@ import com.aws.greengrass.lifecyclemanager.exceptions.ServiceLoadException;
 import com.aws.greengrass.logging.api.Logger;
 import com.aws.greengrass.logging.impl.LogManager;
 import com.aws.greengrass.mqttclient.MqttClient;
+import com.aws.greengrass.mqttclient.StandaloneMqttConnector;
 import com.aws.greengrass.mqttclient.WrapperMqttClientConnection;
+import com.aws.greengrass.security.SecurityService;
+import com.aws.greengrass.security.exceptions.MqttConnectionProviderException;
 import com.aws.greengrass.util.Coerce;
 import com.aws.greengrass.util.LockFactory;
 import com.aws.greengrass.util.LockScope;
@@ -40,6 +44,7 @@ import software.amazon.awssdk.iot.iotshadow.model.ShadowState;
 import software.amazon.awssdk.iot.iotshadow.model.UpdateNamedShadowRequest;
 import software.amazon.awssdk.iot.iotshadow.model.UpdateNamedShadowSubscriptionRequest;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
@@ -111,6 +116,9 @@ public class ShadowDeploymentListener implements InjectionActions {
     private ExecutorService executorService;
     @Inject
     private DeviceConfiguration deviceConfiguration;
+    @Setter
+    @Inject
+    private SecurityService securityService;
     @Setter
     private IotShadowClient iotShadowClient;
     private volatile String thingName;
@@ -495,6 +503,59 @@ public class ShadowDeploymentListener implements InjectionActions {
 
     private MqttClientConnection getMqttClientConnection() {
         return new WrapperMqttClientConnection(mqttClient);
+    }
+
+    /**
+     * Report terminal deployment status to the source account via a standalone MQTT connection.
+     * Used after an endpoint switch when the main MQTT client is connected to the destination account
+     * and cannot reach the source account's named shadow topic.
+     *
+     * <p>Publishes to the deployment shadow without a {@code version} field, performing an
+     * unconditional update per AWS IoT Shadow documentation. This avoids needing to read the
+     * current shadow version from the source account.</p>
+     *
+     * <p>This method is best-effort: all exceptions are caught and logged as warnings.
+     * Failure to report does not affect device state — the source deployment will time out.</p>
+     *
+     * @param sourceEndpoint the IoT data endpoint of the source account
+     * @param configArn      the configuration ARN of the shadow deployment
+     * @param status         terminal deployment status string (e.g. "SUCCEEDED", "FAILED")
+     * @param statusDetails  status detail map
+     */
+    public void reportStatusToSourceEndpoint(String sourceEndpoint, String configArn, String status,
+                                             Map<String, String> statusDetails) {
+        String thing = Coerce.toString(deviceConfiguration.getThingName());
+        String topic = String.format("$aws/things/%s/shadow/name/%s/update", thing, DEPLOYMENT_SHADOW_NAME);
+        try {
+            HashMap<String, Object> reported = new HashMap<>();
+            reported.put(ARN_FOR_STATUS_KEY, configArn);
+            reported.put(STATUS_KEY, status);
+            reported.put(STATUS_DETAILS_KEY, statusDetails);
+            reported.put(GGC_VERSION_KEY, deviceConfiguration.getNucleusVersion());
+
+            HashMap<String, Object> state = new HashMap<>();
+            state.put("reported", reported);
+
+            HashMap<String, Object> payload = new HashMap<>();
+            payload.put("state", state);
+
+            byte[] payloadBytes = SerializerFactory.getFailSafeJsonObjectMapper()
+                    .writeValueAsBytes(payload);
+
+            try (StandaloneMqttConnector connector = StandaloneMqttConnector.of(
+                    securityService, deviceConfiguration, sourceEndpoint, "-status-report")) {
+                connector.connect(60_000);
+                connector.publish(topic, payloadBytes, QualityOfService.AT_LEAST_ONCE, 60_000);
+            }
+            logger.atInfo().kv("configArn", configArn).kv("status", status)
+                    .kv("sourceEndpoint", sourceEndpoint)
+                    .log("Reported terminal shadow status to source account");
+        } catch (IOException | DeploymentException
+                 | MqttConnectionProviderException e) {
+            logger.atWarn().kv("configArn", configArn).kv("status", status)
+                    .kv("sourceEndpoint", sourceEndpoint).setCause(e)
+                    .log("Failed to report terminal shadow status to source account");
+        }
     }
 
     /**

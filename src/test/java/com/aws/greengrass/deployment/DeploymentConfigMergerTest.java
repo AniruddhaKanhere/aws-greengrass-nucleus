@@ -80,6 +80,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
@@ -126,6 +127,9 @@ class DeploymentConfigMergerTest {
         lenient().when(context.get(DeploymentService.class)).thenReturn(deploymentService);
         lenient().when(deploymentService.getRuntimeConfig()).thenReturn(runtimeTopics);
         lenient().when(runtimeTopics.lookup(any(String.class))).thenReturn(mock(Topic.class));
+        Topics mqttTopics = mock(Topics.class);
+        lenient().when(deviceConfiguration.getMQTTNamespace()).thenReturn(mqttTopics);
+        lenient().when(mqttTopics.findOrDefault(any(), any())).thenReturn(60000L);
     }
 
     @AfterEach
@@ -1199,5 +1203,288 @@ class DeploymentConfigMergerTest {
         assertTrue(capturedUrl.contains("new.credentials.iot.us-west-2.amazonaws.com"));
         assertTrue(capturedUrl.contains("NewRoleAlias"));
         verify(deploymentActivator).activate(any(), any(), any(Long.class), any());
+    }
+
+    // --- Source account status reporting tests (Step 5) ---
+
+    @Test
+    void GIVEN_endpoint_switch_succeeded_WHEN_activate_completes_THEN_reports_to_source_via_iot_jobs()
+            throws Exception {
+        // Setup: endpoint switch deployment with source endpoint persisted
+        Topic sourceEndpointTopic = mock(Topic.class);
+        when(sourceEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(runtimeTopics.find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY)).thenReturn(sourceEndpointTopic);
+
+        IotJobsHelper iotJobsHelper = mock(IotJobsHelper.class);
+        when(context.get(IotJobsHelper.class)).thenReturn(iotJobsHelper);
+
+        // Activator completes with SUCCESSFUL
+        DeploymentActivator deploymentActivator = mock(DeploymentActivator.class);
+        doAnswer(invocation -> {
+            CompletableFuture<DeploymentResult> f = invocation.getArgument(3);
+            f.complete(new DeploymentResult(DeploymentResult.DeploymentStatus.SUCCESSFUL, null));
+            return null;
+        }).when(deploymentActivator).activate(any(), any(), any(Long.class), any());
+
+        when(context.get(DeploymentActivatorFactory.class)).thenReturn(mock(DeploymentActivatorFactory.class));
+        when(context.get(DeploymentActivatorFactory.class).getDeploymentActivator(any()))
+                .thenReturn(deploymentActivator);
+        when(context.get(EndpointSwitchPreflightValidator.class))
+                .thenReturn(mock(EndpointSwitchPreflightValidator.class));
+        lenient().when(context.get(EndpointSwitchPreflightValidator.class)
+                .verifyMqttConnectivity(any(), any(), any(), any(Long.class))).thenReturn(true);
+
+        // Configure endpoint switch detection
+        Topic currentEndpointTopic = mock(Topic.class);
+        when(currentEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(deviceConfiguration.getIotDataEndpoint()).thenReturn(currentEndpointTopic);
+
+        Map<String, Object> nucleusConfig = new HashMap<>();
+        nucleusConfig.put(DEVICE_PARAM_IOT_DATA_ENDPOINT, "dest-data.iot.us-west-2.amazonaws.com");
+        Map<String, Object> newConfig = new HashMap<>();
+        newConfig.put(SERVICES_NAMESPACE_TOPIC, Collections.singletonMap(
+                DEFAULT_NUCLEUS_COMPONENT_NAME, Collections.singletonMap(CONFIGURATION_CONFIG_KEY, nucleusConfig)));
+
+        DeploymentDocument doc = mock(DeploymentDocument.class);
+        lenient().when(doc.getDeploymentId()).thenReturn("deploy-1");
+        when(doc.getComponentUpdatePolicy()).thenReturn(new ComponentUpdatePolicy(0, SKIP_NOTIFY_COMPONENTS));
+        lenient().when(deviceConfiguration.getNucleusComponentName()).thenReturn(DEFAULT_NUCLEUS_COMPONENT_NAME);
+
+        DeploymentConfigMerger merger = new DeploymentConfigMerger(kernel, deviceConfiguration, validator,
+                executorService);
+        Deployment deployment = createMockDeployment(doc);
+        when(deployment.getDeploymentType()).thenReturn(Deployment.DeploymentType.IOT_JOBS);
+        when(deployment.getId()).thenReturn("test-job-id");
+
+        merger.mergeInNewConfig(deployment, newConfig, System.currentTimeMillis());
+
+        // Execute the runnable that was submitted to executorService
+        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+        verify(executorService).execute(runnableCaptor.capture());
+        runnableCaptor.getValue().run();
+
+        // Verify: reported to source via IotJobsHelper
+        verify(iotJobsHelper).reportStatusToSourceEndpoint(
+                eq("source-data.iot.us-east-1.amazonaws.com"),
+                any(), any(), any());
+        // Verify: source endpoint key was cleared
+        verify(sourceEndpointTopic).remove();
+    }
+
+    @Test
+    void GIVEN_endpoint_switch_rollback_complete_WHEN_activate_completes_THEN_clears_key_no_standalone()
+            throws Exception {
+        // Setup: endpoint switch deployment with source endpoint persisted
+        Topic sourceEndpointTopic = mock(Topic.class);
+        when(sourceEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(runtimeTopics.find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY)).thenReturn(sourceEndpointTopic);
+
+        IotJobsHelper iotJobsHelper = mock(IotJobsHelper.class);
+        lenient().when(context.get(IotJobsHelper.class)).thenReturn(iotJobsHelper);
+
+        // Activator completes with FAILED_ROLLBACK_COMPLETE
+        DeploymentActivator deploymentActivator = mock(DeploymentActivator.class);
+        doAnswer(invocation -> {
+            CompletableFuture<DeploymentResult> f = invocation.getArgument(3);
+            f.complete(new DeploymentResult(DeploymentResult.DeploymentStatus.FAILED_ROLLBACK_COMPLETE,
+                    new RuntimeException("test")));
+            return null;
+        }).when(deploymentActivator).activate(any(), any(), any(Long.class), any());
+
+        when(context.get(DeploymentActivatorFactory.class)).thenReturn(mock(DeploymentActivatorFactory.class));
+        when(context.get(DeploymentActivatorFactory.class).getDeploymentActivator(any()))
+                .thenReturn(deploymentActivator);
+        when(context.get(EndpointSwitchPreflightValidator.class))
+                .thenReturn(mock(EndpointSwitchPreflightValidator.class));
+        lenient().when(context.get(EndpointSwitchPreflightValidator.class)
+                .verifyMqttConnectivity(any(), any(), any(), any(Long.class))).thenReturn(true);
+
+        Topic currentEndpointTopic = mock(Topic.class);
+        when(currentEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(deviceConfiguration.getIotDataEndpoint()).thenReturn(currentEndpointTopic);
+
+        Map<String, Object> nucleusConfig = new HashMap<>();
+        nucleusConfig.put(DEVICE_PARAM_IOT_DATA_ENDPOINT, "dest-data.iot.us-west-2.amazonaws.com");
+        Map<String, Object> newConfig = new HashMap<>();
+        newConfig.put(SERVICES_NAMESPACE_TOPIC, Collections.singletonMap(
+                DEFAULT_NUCLEUS_COMPONENT_NAME, Collections.singletonMap(CONFIGURATION_CONFIG_KEY, nucleusConfig)));
+
+        DeploymentDocument doc = mock(DeploymentDocument.class);
+        lenient().when(doc.getDeploymentId()).thenReturn("deploy-1");
+        when(doc.getComponentUpdatePolicy()).thenReturn(new ComponentUpdatePolicy(0, SKIP_NOTIFY_COMPONENTS));
+        lenient().when(deviceConfiguration.getNucleusComponentName()).thenReturn(DEFAULT_NUCLEUS_COMPONENT_NAME);
+
+        DeploymentConfigMerger merger = new DeploymentConfigMerger(kernel, deviceConfiguration, validator,
+                executorService);
+        Deployment deployment = createMockDeployment(doc);
+        lenient().when(deployment.getDeploymentType()).thenReturn(Deployment.DeploymentType.IOT_JOBS);
+
+        merger.mergeInNewConfig(deployment, newConfig, System.currentTimeMillis());
+
+        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+        verify(executorService).execute(runnableCaptor.capture());
+        runnableCaptor.getValue().run();
+
+        // Verify: source endpoint key was cleared
+        verify(sourceEndpointTopic).remove();
+        // Verify: no standalone report (rollback means main MQTT is still on source)
+        verify(iotJobsHelper, never()).reportStatusToSourceEndpoint(any(), any(), any(), any());
+    }
+
+    @Test
+    void GIVEN_no_endpoint_switch_WHEN_deployment_succeeds_THEN_no_source_report() throws Exception {
+        // No source endpoint persisted
+        when(runtimeTopics.find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY)).thenReturn(null);
+
+        IotJobsHelper iotJobsHelper = mock(IotJobsHelper.class);
+        lenient().when(context.get(IotJobsHelper.class)).thenReturn(iotJobsHelper);
+
+        DeploymentActivator deploymentActivator = mock(DeploymentActivator.class);
+        doAnswer(invocation -> {
+            CompletableFuture<DeploymentResult> f = invocation.getArgument(3);
+            f.complete(new DeploymentResult(DeploymentResult.DeploymentStatus.SUCCESSFUL, null));
+            return null;
+        }).when(deploymentActivator).activate(any(), any(), any(Long.class), any());
+
+        when(context.get(DeploymentActivatorFactory.class)).thenReturn(mock(DeploymentActivatorFactory.class));
+        when(context.get(DeploymentActivatorFactory.class).getDeploymentActivator(any()))
+                .thenReturn(deploymentActivator);
+
+        Map<String, Object> newConfig = new HashMap<>();
+        newConfig.put(SERVICES_NAMESPACE_TOPIC, Collections.singletonMap("SomeComponent", new HashMap<>()));
+
+        DeploymentDocument doc = mock(DeploymentDocument.class);
+        lenient().when(doc.getDeploymentId()).thenReturn("deploy-1");
+        when(doc.getComponentUpdatePolicy()).thenReturn(new ComponentUpdatePolicy(0, SKIP_NOTIFY_COMPONENTS));
+
+        DeploymentConfigMerger merger = new DeploymentConfigMerger(kernel, deviceConfiguration, validator,
+                executorService);
+
+        merger.mergeInNewConfig(createMockDeployment(doc), newConfig, System.currentTimeMillis());
+
+        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+        verify(executorService).execute(runnableCaptor.capture());
+        runnableCaptor.getValue().run();
+
+        // No source endpoint → no standalone report
+        verify(iotJobsHelper, never()).reportStatusToSourceEndpoint(any(), any(), any(), any());
+    }
+
+    @Test
+    void GIVEN_endpoint_switch_shadow_succeeded_WHEN_activate_completes_THEN_reports_to_source_via_shadow()
+            throws Exception {
+        Topic sourceEndpointTopic = mock(Topic.class);
+        when(sourceEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(runtimeTopics.find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY)).thenReturn(sourceEndpointTopic);
+
+        ShadowDeploymentListener shadowListener = mock(ShadowDeploymentListener.class);
+        when(context.get(ShadowDeploymentListener.class)).thenReturn(shadowListener);
+
+        DeploymentActivator deploymentActivator = mock(DeploymentActivator.class);
+        doAnswer(invocation -> {
+            CompletableFuture<DeploymentResult> f = invocation.getArgument(3);
+            f.complete(new DeploymentResult(DeploymentResult.DeploymentStatus.SUCCESSFUL, null));
+            return null;
+        }).when(deploymentActivator).activate(any(), any(), any(Long.class), any());
+
+        when(context.get(DeploymentActivatorFactory.class)).thenReturn(mock(DeploymentActivatorFactory.class));
+        when(context.get(DeploymentActivatorFactory.class).getDeploymentActivator(any()))
+                .thenReturn(deploymentActivator);
+        when(context.get(EndpointSwitchPreflightValidator.class))
+                .thenReturn(mock(EndpointSwitchPreflightValidator.class));
+        lenient().when(context.get(EndpointSwitchPreflightValidator.class)
+                .verifyMqttConnectivity(any(), any(), any(), any(Long.class))).thenReturn(true);
+
+        Topic currentEndpointTopic = mock(Topic.class);
+        when(currentEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(deviceConfiguration.getIotDataEndpoint()).thenReturn(currentEndpointTopic);
+
+        Map<String, Object> nucleusConfig = new HashMap<>();
+        nucleusConfig.put(DEVICE_PARAM_IOT_DATA_ENDPOINT, "dest-data.iot.us-west-2.amazonaws.com");
+        Map<String, Object> newConfig = new HashMap<>();
+        newConfig.put(SERVICES_NAMESPACE_TOPIC, Collections.singletonMap(
+                DEFAULT_NUCLEUS_COMPONENT_NAME, Collections.singletonMap(CONFIGURATION_CONFIG_KEY, nucleusConfig)));
+
+        DeploymentDocument doc = mock(DeploymentDocument.class);
+        lenient().when(doc.getDeploymentId()).thenReturn("deploy-1");
+        when(doc.getComponentUpdatePolicy()).thenReturn(new ComponentUpdatePolicy(0, SKIP_NOTIFY_COMPONENTS));
+        lenient().when(deviceConfiguration.getNucleusComponentName()).thenReturn(DEFAULT_NUCLEUS_COMPONENT_NAME);
+
+        DeploymentConfigMerger merger = new DeploymentConfigMerger(kernel, deviceConfiguration, validator,
+                executorService);
+        Deployment deployment = createMockDeployment(doc);
+        when(deployment.getDeploymentType()).thenReturn(Deployment.DeploymentType.SHADOW);
+        lenient().when(deployment.getConfigurationArn()).thenReturn("arn:aws:greengrass:us-east-1:123:config");
+
+        merger.mergeInNewConfig(deployment, newConfig, System.currentTimeMillis());
+
+        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+        verify(executorService).execute(runnableCaptor.capture());
+        runnableCaptor.getValue().run();
+
+        verify(shadowListener).reportStatusToSourceEndpoint(
+                eq("source-data.iot.us-east-1.amazonaws.com"),
+                any(), eq("SUCCEEDED"), any());
+        verify(sourceEndpointTopic).remove();
+    }
+
+    @Test
+    void GIVEN_endpoint_switch_failed_unable_to_rollback_WHEN_activate_completes_THEN_reports_to_source()
+            throws Exception {
+        Topic sourceEndpointTopic = mock(Topic.class);
+        when(sourceEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(runtimeTopics.find(DeploymentService.SOURCE_IOT_DATA_ENDPOINT_KEY)).thenReturn(sourceEndpointTopic);
+
+        IotJobsHelper iotJobsHelper = mock(IotJobsHelper.class);
+        when(context.get(IotJobsHelper.class)).thenReturn(iotJobsHelper);
+
+        DeploymentActivator deploymentActivator = mock(DeploymentActivator.class);
+        doAnswer(invocation -> {
+            CompletableFuture<DeploymentResult> f = invocation.getArgument(3);
+            f.complete(new DeploymentResult(DeploymentResult.DeploymentStatus.FAILED_UNABLE_TO_ROLLBACK,
+                    new RuntimeException("rollback failed")));
+            return null;
+        }).when(deploymentActivator).activate(any(), any(), any(Long.class), any());
+
+        when(context.get(DeploymentActivatorFactory.class)).thenReturn(mock(DeploymentActivatorFactory.class));
+        when(context.get(DeploymentActivatorFactory.class).getDeploymentActivator(any()))
+                .thenReturn(deploymentActivator);
+        when(context.get(EndpointSwitchPreflightValidator.class))
+                .thenReturn(mock(EndpointSwitchPreflightValidator.class));
+        lenient().when(context.get(EndpointSwitchPreflightValidator.class)
+                .verifyMqttConnectivity(any(), any(), any(), any(Long.class))).thenReturn(true);
+
+        Topic currentEndpointTopic = mock(Topic.class);
+        when(currentEndpointTopic.getOnce()).thenReturn("source-data.iot.us-east-1.amazonaws.com");
+        when(deviceConfiguration.getIotDataEndpoint()).thenReturn(currentEndpointTopic);
+
+        Map<String, Object> nucleusConfig = new HashMap<>();
+        nucleusConfig.put(DEVICE_PARAM_IOT_DATA_ENDPOINT, "dest-data.iot.us-west-2.amazonaws.com");
+        Map<String, Object> newConfig = new HashMap<>();
+        newConfig.put(SERVICES_NAMESPACE_TOPIC, Collections.singletonMap(
+                DEFAULT_NUCLEUS_COMPONENT_NAME, Collections.singletonMap(CONFIGURATION_CONFIG_KEY, nucleusConfig)));
+
+        DeploymentDocument doc = mock(DeploymentDocument.class);
+        lenient().when(doc.getDeploymentId()).thenReturn("deploy-1");
+        when(doc.getComponentUpdatePolicy()).thenReturn(new ComponentUpdatePolicy(0, SKIP_NOTIFY_COMPONENTS));
+        lenient().when(deviceConfiguration.getNucleusComponentName()).thenReturn(DEFAULT_NUCLEUS_COMPONENT_NAME);
+
+        DeploymentConfigMerger merger = new DeploymentConfigMerger(kernel, deviceConfiguration, validator,
+                executorService);
+        Deployment deployment = createMockDeployment(doc);
+        when(deployment.getDeploymentType()).thenReturn(Deployment.DeploymentType.IOT_JOBS);
+        lenient().when(deployment.getId()).thenReturn("test-job-id");
+
+        merger.mergeInNewConfig(deployment, newConfig, System.currentTimeMillis());
+
+        ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+        verify(executorService).execute(runnableCaptor.capture());
+        runnableCaptor.getValue().run();
+
+        // FAILED_UNABLE_TO_ROLLBACK should still trigger standalone report with "FAILED" status
+        verify(iotJobsHelper).reportStatusToSourceEndpoint(
+                eq("source-data.iot.us-east-1.amazonaws.com"),
+                any(), any(), any());
+        verify(sourceEndpointTopic).remove();
     }
 }

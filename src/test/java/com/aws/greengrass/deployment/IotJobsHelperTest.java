@@ -11,11 +11,14 @@ import com.aws.greengrass.config.Topic;
 import com.aws.greengrass.config.WhatHappened;
 import com.aws.greengrass.dependency.Context;
 import com.aws.greengrass.deployment.exceptions.DeviceConfigurationException;
+import com.aws.greengrass.deployment.exceptions.DeploymentException;
 import com.aws.greengrass.deployment.model.Deployment;
 import com.aws.greengrass.deployment.model.DeploymentTaskMetadata;
 import com.aws.greengrass.lifecyclemanager.Kernel;
 import com.aws.greengrass.mqttclient.MqttClient;
+import com.aws.greengrass.mqttclient.StandaloneMqttConnector;
 import com.aws.greengrass.mqttclient.WrapperMqttClientConnection;
+import com.aws.greengrass.security.SecurityService;
 import com.aws.greengrass.status.FleetStatusService;
 import com.aws.greengrass.status.model.Trigger;
 import com.aws.greengrass.testcommons.testutilities.GGExtension;
@@ -56,6 +59,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import org.mockito.MockedStatic;
+
 import static com.aws.greengrass.deployment.DeviceConfiguration.DEVICE_PARAM_IOT_DATA_ENDPOINT;
 import static com.aws.greengrass.deployment.IotJobsClientWrapper.JOB_UPDATE_ACCEPTED_TOPIC;
 import static com.aws.greengrass.deployment.IotJobsClientWrapper.JOB_UPDATE_REJECTED_TOPIC;
@@ -71,6 +76,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -635,6 +641,69 @@ class IotJobsHelperTest {
         iotJobsHelper.getCallbacks().onConnectionResumed(false);
         verify(mockIotJobsClientWrapper, times(1)).SubscribeToJobExecutionsChangedEvents(any(), any(), any());
         verify(deploymentStatusKeeper, times(2)).publishPersistedStatusUpdates(eq(IOT_JOBS));
+    }
+
+    @Test
+    void GIVEN_source_endpoint_WHEN_report_status_to_source_THEN_connects_publishes_and_closes() throws Exception {
+        iotJobsHelper.postInject();
+        SecurityService mockSecurityService = mock(SecurityService.class);
+        iotJobsHelper.setSecurityService(mockSecurityService);
+
+        try (StandaloneMqttConnector mockConnector = mock(StandaloneMqttConnector.class);
+             MockedStatic<StandaloneMqttConnector> staticMock =
+                     mockStatic(StandaloneMqttConnector.class)) {
+            staticMock.when(() -> StandaloneMqttConnector.of(
+                    eq(mockSecurityService), eq(deviceConfiguration),
+                    eq("source-endpoint.iot.us-east-1.amazonaws.com"), eq("-status-report")))
+                    .thenReturn(mockConnector);
+
+            HashMap<String, String> statusDetails = new HashMap<>();
+            statusDetails.put("type", "test");
+            iotJobsHelper.reportStatusToSourceEndpoint(
+                    "source-endpoint.iot.us-east-1.amazonaws.com",
+                    "test-job-id", JobStatus.SUCCEEDED, statusDetails);
+
+            verify(mockConnector).connect(60_000);
+            verify(mockConnector).publish(
+                    eq("$aws/things/" + TEST_THING_NAME + "/jobs/test-job-id/update"),
+                    any(byte[].class),
+                    eq(QualityOfService.AT_LEAST_ONCE),
+                    eq(60_000L));
+            verify(mockConnector).close();
+        }
+    }
+
+    @Test
+    void GIVEN_source_endpoint_unreachable_WHEN_report_status_to_source_THEN_logs_warning_and_does_not_throw(
+            ExtensionContext extContext) throws Exception {
+        ignoreExceptionOfType(extContext, DeploymentException.class);
+        iotJobsHelper.postInject();
+        SecurityService mockSecurityService = mock(SecurityService.class);
+        iotJobsHelper.setSecurityService(mockSecurityService);
+
+        try (StandaloneMqttConnector mockConnector = mock(StandaloneMqttConnector.class);
+             MockedStatic<StandaloneMqttConnector> staticMock =
+                     mockStatic(StandaloneMqttConnector.class)) {
+            doThrow(new DeploymentException("connect failed"))
+                    .when(mockConnector).connect(60_000);
+            staticMock.when(() -> StandaloneMqttConnector.of(any(), any(), any(), any()))
+                    .thenReturn(mockConnector);
+
+            CountDownLatch warnLatch = new CountDownLatch(1);
+            try (AutoCloseable ac = createCloseableLogListener(l -> {
+                if (l.getMessage() != null && l.getMessage().contains(
+                        "Failed to report terminal job status to source account")) {
+                    warnLatch.countDown();
+                }
+            })) {
+                HashMap<String, String> statusDetails = new HashMap<>();
+                iotJobsHelper.reportStatusToSourceEndpoint(
+                        "unreachable.iot.us-east-1.amazonaws.com",
+                        "test-job-id", JobStatus.SUCCEEDED, statusDetails);
+                assertTrue(warnLatch.await(2, TimeUnit.SECONDS),
+                        "Expected warning log for failed status report");
+            }
+        }
     }
 
     private JobExecutionData getMockJobExecutionData(String jobId, Timestamp ts) {
