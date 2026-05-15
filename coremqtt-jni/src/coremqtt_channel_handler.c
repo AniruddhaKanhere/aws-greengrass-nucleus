@@ -383,10 +383,17 @@ static bool s_mqtt_event_callback(
                 if (pDeserializedInfo->pReasonCode != NULL) {
                     rc = (int)pDeserializedInfo->pReasonCode->reasonCode[0];
                 }
+                fprintf(stderr, "[coremqtt_jni] Completing future for packetId=%u with rc=%d\n", packet_id, rc);
                 s_complete_java_future(h->jvm, ack_data->java_future, rc, true);
+                fprintf(stderr, "[coremqtt_jni] Future completed for packetId=%u\n", packet_id);
                 JNIEnv *env = NULL;
                 (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
                 if (env) {
+                    if ((*env)->ExceptionCheck(env)) {
+                        fprintf(stderr, "[coremqtt_jni] JNI EXCEPTION after completing future!\n");
+                        (*env)->ExceptionDescribe(env);
+                        (*env)->ExceptionClear(env);
+                    }
                     (*env)->DeleteGlobalRef(env, ack_data->java_future);
                 }
                 aws_mem_release(h->allocator, ack_data);
