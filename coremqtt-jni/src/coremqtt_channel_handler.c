@@ -665,49 +665,63 @@ void coremqtt_on_channel_setup(
     fprintf(stderr, "[coremqtt_jni] Handler installed. slot=%p, adj_left=%p, adj_right=%p\n",
             (void*)h->slot, (void*)h->slot->adj_left, (void*)h->slot->adj_right);
 
-    /* Send MQTT CONNECT packet with timeout=0 (non-blocking, just sends the packet) */
+    /* Send MQTT CONNECT packet using serializer (non-blocking, no waiting for CONNACK) */
     MQTTConnectInfo_t connect_info = {
-        .cleanSession = false, /* persistent session */
+        .cleanSession = false,
         .keepAliveSeconds = h->keep_alive_sec,
         .pClientIdentifier = h->client_id,
         .clientIdentifierLength = h->client_id ? strlen(h->client_id) : 0,
     };
 
-    bool session_present = false;
-    /* Use timeout=0: sends CONNECT packet, tries to recv CONNACK once, likely returns MQTTNoDataAvailable */
-    MQTTStatus_t status = MQTT_Connect(&h->mqtt_ctx, &connect_info, NULL, 0,
-                                        &session_present, NULL, NULL);
-
-    fprintf(stderr, "[coremqtt_jni] MQTT_Connect returned: %d, sessionPresent=%d\n", (int)status, session_present);
+    /* Get packet size */
+    size_t remaining_length = 0;
+    size_t packet_size = 0;
+    MQTTStatus_t status = MQTT_GetConnectPacketSize(&connect_info, NULL, NULL, NULL,
+                                                     &remaining_length, &packet_size);
+    fprintf(stderr, "[coremqtt_jni] MQTT_GetConnectPacketSize: status=%d, size=%zu\n", (int)status, packet_size);
 
     if (status == MQTTSuccess) {
-        /* CONNACK received immediately (unlikely but possible) */
-        h->is_connected = true;
-        s_schedule_keepalive(h);
-        if (h->java_callback != NULL) {
-            JNIEnv *env = NULL;
-            (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
-            if (env) {
-                (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid,
-                                      (jboolean)session_present);
-            }
-        }
-    } else if (status == MQTTNoDataAvailable || status == MQTTNeedMoreBytes) {
-        /* CONNECT sent but CONNACK not yet received - this is expected.
-         * CONNACK will arrive via s_process_read_message -> MQTT_ProcessLoop.
-         * Mark as "connecting" - the event callback will handle CONNACK. */
-        fprintf(stderr, "[coremqtt_jni] CONNECT sent, waiting for CONNACK via ProcessLoop\n");
-        h->is_connected = true; /* Optimistically set - ProcessLoop will handle CONNACK */
-        s_schedule_keepalive(h);
-        if (h->java_callback != NULL) {
-            JNIEnv *env = NULL;
-            (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
-            if (env) {
-                (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid, (jboolean)false);
+        /* Serialize into a temporary buffer */
+        uint8_t connect_buf[256];
+        MQTTFixedBuffer_t fixed_buf = { .pBuffer = connect_buf, .size = sizeof(connect_buf) };
+        status = MQTT_SerializeConnect(&connect_info, NULL, NULL, NULL,
+                                        remaining_length, &fixed_buf);
+        fprintf(stderr, "[coremqtt_jni] MQTT_SerializeConnect: status=%d, len=%zu\n", (int)status, fixed_buf.size);
+
+        if (status == MQTTSuccess) {
+            /* Send via transport */
+            int32_t sent = s_transport_send((NetworkContext_t *)h, connect_buf, packet_size);
+            fprintf(stderr, "[coremqtt_jni] CONNECT packet sent: %d bytes\n", sent);
+
+            if (sent > 0) {
+                /* Mark as waiting for CONNACK - ProcessLoop will handle it */
+                h->mqtt_ctx.connectStatus = MQTTConnected; /* Allow ProcessLoop to run */
+                h->mqtt_ctx.keepAliveIntervalSec = h->keep_alive_sec;
+                h->is_connected = true;
+                s_schedule_keepalive(h);
+
+                if (h->java_callback != NULL) {
+                    JNIEnv *env = NULL;
+                    (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
+                    if (env) {
+                        (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid,
+                                              (jboolean)false);
+                    }
+                }
+            } else {
+                fprintf(stderr, "[coremqtt_jni] CONNECT send failed\n");
+                if (h->java_callback != NULL) {
+                    JNIEnv *env = NULL;
+                    (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
+                    if (env) {
+                        (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_failure_mid, (jint)4);
+                    }
+                }
+                aws_channel_shutdown(channel, AWS_ERROR_INVALID_STATE);
             }
         }
     } else {
-        fprintf(stderr, "[coremqtt_jni] MQTT_Connect FAILED: %d\n", (int)status);
+        fprintf(stderr, "[coremqtt_jni] GetConnectPacketSize failed: %d\n", (int)status);
         if (h->java_callback != NULL) {
             JNIEnv *env = NULL;
             (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
