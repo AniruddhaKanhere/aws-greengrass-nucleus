@@ -131,6 +131,9 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     const char *client_id = (*env)->GetStringUTFChars(env, jclient_id, NULL);
 
     /* Store client ID in handler for use during MQTT_Connect */
+    if (handler->client_id) {
+        aws_mem_release(alloc, handler->client_id);
+    }
     handler->client_id = aws_mem_calloc(alloc, 1, strlen(client_id) + 1);
     memcpy(handler->client_id, client_id, strlen(client_id) + 1);
 

@@ -210,6 +210,25 @@ CMakeFiles/coremqtt_jni.dir/src/coremqtt_jni.c.o: \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/include/core_mqtt.h \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/include/core_mqtt_serializer.h \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/interface/transport_interface.h \
+  /tmp/aws-crt-install/include/aws/cal/cal.h \
+  /tmp/aws-crt-install/include/aws/common/logging.h \
+  /tmp/aws-crt-install/include/aws/common/thread.h \
+  /tmp/aws-crt-install/include/aws/common/string.h \
+  /tmp/aws-crt-install/include/aws/common/string.inl \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/ctype.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/_ctype.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/runetype.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_wint_t.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/pthread.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/pthread/sched.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/pthread/pthread_impl.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/time.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/_time.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_timespec.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/pthread/qos.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/qos.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_mach_port_t.h \
+  /tmp/aws-crt-install/include/aws/cal/exports.h \
   /tmp/aws-crt-install/include/aws/io/socket.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/un.h \
   /tmp/aws-crt-install/include/aws/io/tls_channel_handler.h

@@ -914,6 +914,10 @@ void coremqtt_channel_handler_destroy(struct coremqtt_channel_handler *handler) 
 
     aws_hash_table_clean_up(&handler->pending_acks);
 
+    if (handler->client_id != NULL) {
+        aws_mem_release(handler->allocator, handler->client_id);
+    }
+
     if (handler->java_callback != NULL) {
         JNIEnv *env = NULL;
         (*handler->jvm)->AttachCurrentThread(handler->jvm, (void **)&env, NULL);

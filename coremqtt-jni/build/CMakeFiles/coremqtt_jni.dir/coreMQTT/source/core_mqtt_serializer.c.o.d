@@ -67,4 +67,13 @@ CMakeFiles/coremqtt_jni.dir/coreMQTT/source/core_mqtt_serializer.c.o: \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/interface/transport_interface.h \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/include/private/core_mqtt_serializer_private.h \
   /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/coreMQTT/source/include/core_mqtt_config_defaults.h \
-  /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/include/core_mqtt_config.h
+  /Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/include/core_mqtt_config.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/stdio.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/_stdio.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_va_list.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/stdio.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/_printf.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_seek_set.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/_ctermid.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_off_t.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/secure/_stdio.h

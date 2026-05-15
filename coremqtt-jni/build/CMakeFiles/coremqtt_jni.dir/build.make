@@ -207,6 +207,9 @@ libcoremqtt_jni.dylib: CMakeFiles/coremqtt_jni.dir/coreMQTT/source/core_mqtt_pro
 libcoremqtt_jni.dylib: CMakeFiles/coremqtt_jni.dir/src/coremqtt_channel_handler.c.o
 libcoremqtt_jni.dylib: CMakeFiles/coremqtt_jni.dir/src/coremqtt_jni.c.o
 libcoremqtt_jni.dylib: CMakeFiles/coremqtt_jni.dir/build.make
+libcoremqtt_jni.dylib: /tmp/aws-crt-install/lib/libaws-c-io.a
+libcoremqtt_jni.dylib: /tmp/aws-crt-install/lib/libaws-c-cal.a
+libcoremqtt_jni.dylib: /tmp/aws-crt-install/lib/libaws-c-common.a
 libcoremqtt_jni.dylib: CMakeFiles/coremqtt_jni.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/kanherea/Desktop/MQTTv5Update/nucleus-to-coremqtt/aws-greengrass-nucleus/coremqtt-jni/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking C shared library libcoremqtt_jni.dylib"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/coremqtt_jni.dir/link.txt --verbose=$(VERBOSE)
