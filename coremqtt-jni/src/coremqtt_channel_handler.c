@@ -594,7 +594,11 @@ void coremqtt_on_channel_setup(
     (void)bootstrap;
     struct coremqtt_channel_handler *h = user_data;
 
+    fprintf(stderr, "[coremqtt_jni] channel_setup callback: error_code=%d, channel=%p\n",
+            error_code, (void*)channel);
+
     if (error_code != 0 || channel == NULL) {
+        fprintf(stderr, "[coremqtt_jni] channel_setup FAILED: error=%d\n", error_code);
         if (h->java_callback != NULL) {
             JNIEnv *env = NULL;
             (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
@@ -611,7 +615,7 @@ void coremqtt_on_channel_setup(
     aws_channel_slot_set_handler(h->slot, &h->base);
     h->loop = aws_channel_get_event_loop(channel);
 
-    /* Send MQTT CONNECT */
+    /* Send MQTT CONNECT packet with timeout=0 (non-blocking, just sends the packet) */
     MQTTConnectInfo_t connect_info = {
         .cleanSession = false, /* persistent session */
         .keepAliveSeconds = h->keep_alive_sec,
@@ -620,10 +624,14 @@ void coremqtt_on_channel_setup(
     };
 
     bool session_present = false;
-    MQTTStatus_t status = MQTT_Connect(&h->mqtt_ctx, &connect_info, NULL, 30000,
+    /* Use timeout=0: sends CONNECT packet, tries to recv CONNACK once, likely returns MQTTNoDataAvailable */
+    MQTTStatus_t status = MQTT_Connect(&h->mqtt_ctx, &connect_info, NULL, 0,
                                         &session_present, NULL, NULL);
 
+    fprintf(stderr, "[coremqtt_jni] MQTT_Connect returned: %d, sessionPresent=%d\n", (int)status, session_present);
+
     if (status == MQTTSuccess) {
+        /* CONNACK received immediately (unlikely but possible) */
         h->is_connected = true;
         s_schedule_keepalive(h);
         if (h->java_callback != NULL) {
@@ -634,7 +642,22 @@ void coremqtt_on_channel_setup(
                                       (jboolean)session_present);
             }
         }
+    } else if (status == MQTTNoDataAvailable || status == MQTTNeedMoreBytes) {
+        /* CONNECT sent but CONNACK not yet received - this is expected.
+         * CONNACK will arrive via s_process_read_message -> MQTT_ProcessLoop.
+         * Mark as "connecting" - the event callback will handle CONNACK. */
+        fprintf(stderr, "[coremqtt_jni] CONNECT sent, waiting for CONNACK via ProcessLoop\n");
+        h->is_connected = true; /* Optimistically set - ProcessLoop will handle CONNACK */
+        s_schedule_keepalive(h);
+        if (h->java_callback != NULL) {
+            JNIEnv *env = NULL;
+            (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
+            if (env) {
+                (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid, (jboolean)false);
+            }
+        }
     } else {
+        fprintf(stderr, "[coremqtt_jni] MQTT_Connect FAILED: %d\n", (int)status);
         if (h->java_callback != NULL) {
             JNIEnv *env = NULL;
             (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);

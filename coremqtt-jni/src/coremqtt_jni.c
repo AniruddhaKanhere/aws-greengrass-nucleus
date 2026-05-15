@@ -140,13 +140,18 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     struct aws_tls_ctx_options tls_ctx_options;
     AWS_ZERO_STRUCT(tls_ctx_options);
     if (aws_tls_ctx_options_init_client_mtls_from_path(&tls_ctx_options, alloc, cert_path, key_path)) {
+        fprintf(stderr, "[coremqtt_jni] ERROR: aws_tls_ctx_options_init_client_mtls_from_path failed: %d (%s)\n",
+                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());
         }
         goto cleanup;
     }
+    fprintf(stderr, "[coremqtt_jni] TLS ctx options init OK (cert=%s, key=%s)\n", cert_path, key_path);
     if (aws_tls_ctx_options_override_default_trust_store_from_path(&tls_ctx_options, NULL, ca_path)) {
+        fprintf(stderr, "[coremqtt_jni] ERROR: override_default_trust_store failed: %d (%s)\n",
+                aws_last_error(), aws_error_name(aws_last_error()));
         aws_tls_ctx_options_clean_up(&tls_ctx_options);
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
@@ -154,17 +159,21 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
         }
         goto cleanup;
     }
+    fprintf(stderr, "[coremqtt_jni] Trust store override OK (ca=%s)\n", ca_path);
 
     struct aws_tls_ctx *tls_ctx = aws_tls_client_ctx_new(alloc, &tls_ctx_options);
     aws_tls_ctx_options_clean_up(&tls_ctx_options);
 
     if (tls_ctx == NULL) {
+        fprintf(stderr, "[coremqtt_jni] ERROR: aws_tls_client_ctx_new failed: %d (%s)\n",
+                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());
         }
         goto cleanup;
     }
+    fprintf(stderr, "[coremqtt_jni] TLS client ctx created OK\n");
 
     /* Set up TLS connection options */
     struct aws_tls_connection_options tls_conn_options;
@@ -193,7 +202,11 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     };
 
     int result = aws_client_bootstrap_new_socket_channel(&channel_options);
+    fprintf(stderr, "[coremqtt_jni] aws_client_bootstrap_new_socket_channel returned: %d (endpoint=%s:%d)\n",
+            result, endpoint, (int)port);
     if (result != AWS_OP_SUCCESS) {
+        fprintf(stderr, "[coremqtt_jni] ERROR: bootstrap_new_socket_channel failed: %d (%s)\n",
+                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());

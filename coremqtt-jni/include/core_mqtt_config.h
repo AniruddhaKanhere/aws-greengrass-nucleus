@@ -23,8 +23,8 @@
 /* Send PINGREQ after 30s of RX inactivity. */
 #define PACKET_RX_TIMEOUT_MS            ( 30000U )
 
-/* CONNACK receive retries. */
-#define MQTT_MAX_CONNACK_RECEIVE_RETRY_COUNT ( 5U )
+/* CONNACK receive retries: 0 means try once and return (non-blocking connect). */
+#define MQTT_MAX_CONNACK_RECEIVE_RETRY_COUNT ( 0U )
 
 /* Max vectors for subscribe/unsubscribe packets. */
 #define MQTT_SUB_UNSUB_MAX_VECTORS      ( 4U )
