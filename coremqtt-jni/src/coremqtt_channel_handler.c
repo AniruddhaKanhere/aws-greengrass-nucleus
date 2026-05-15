@@ -615,11 +615,9 @@ void coremqtt_on_channel_setup(
     MQTTConnectInfo_t connect_info = {
         .cleanSession = false, /* persistent session */
         .keepAliveSeconds = h->keep_alive_sec,
-        .pClientIdentifier = NULL, /* set by caller before setup */
-        .clientIdentifierLength = 0,
+        .pClientIdentifier = h->client_id,
+        .clientIdentifierLength = h->client_id ? strlen(h->client_id) : 0,
     };
-
-    /* TODO: client ID and session expiry will be set from JNI before connection */
 
     bool session_present = false;
     MQTTStatus_t status = MQTT_Connect(&h->mqtt_ctx, &connect_info, NULL, 30000,

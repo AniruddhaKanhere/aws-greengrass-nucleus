@@ -17,7 +17,6 @@ import com.aws.greengrass.mqttclient.v5.UnsubscribeResponse;
 import com.aws.greengrass.util.Coerce;
 import lombok.Getter;
 import software.amazon.awssdk.crt.io.ClientBootstrap;
-import software.amazon.awssdk.crt.io.ClientTlsContext;
 import vendored.com.google.common.util.concurrent.RateLimiter;
 
 import java.time.Duration;
@@ -64,7 +63,9 @@ class CoreMqttJniClient implements IndividualMqttClient {
     private final ScheduledExecutorService ses;
     private final Consumer<Publish> messageHandler;
     private final Supplier<ClientBootstrap> bootstrapSupplier;
-    private final Supplier<ClientTlsContext> tlsContextSupplier;
+    private final Supplier<String> certPathSupplier;
+    private final Supplier<String> keyPathSupplier;
+    private final Supplier<String> caPathSupplier;
     private final Supplier<String> endpointSupplier;
     private final Supplier<Integer> portSupplier;
 
@@ -119,6 +120,10 @@ class CoreMqttJniClient implements IndividualMqttClient {
             logger.atWarn().kv("errorCode", errorCode).log("coreMQTT connection interrupted");
             callbackEventManager.runOnConnectionInterrupted(errorCode);
         }
+
+        public void onAckReceived(int packetId, int reasonCode) {
+            // ACKs are handled via CompletableFuture in the native layer
+        }
     };
 
     CoreMqttJniClient(
@@ -130,7 +135,9 @@ class CoreMqttJniClient implements IndividualMqttClient {
             ExecutorService executorService,
             ScheduledExecutorService ses,
             Supplier<ClientBootstrap> bootstrapSupplier,
-            Supplier<ClientTlsContext> tlsContextSupplier,
+            Supplier<String> certPathSupplier,
+            Supplier<String> keyPathSupplier,
+            Supplier<String> caPathSupplier,
             Supplier<String> endpointSupplier,
             Supplier<Integer> portSupplier) {
 
@@ -142,7 +149,9 @@ class CoreMqttJniClient implements IndividualMqttClient {
         this.ses = ses;
         this.messageHandler = messageHandlerFactory.apply(this);
         this.bootstrapSupplier = bootstrapSupplier;
-        this.tlsContextSupplier = tlsContextSupplier;
+        this.certPathSupplier = certPathSupplier;
+        this.keyPathSupplier = keyPathSupplier;
+        this.caPathSupplier = caPathSupplier;
         this.endpointSupplier = endpointSupplier;
         this.portSupplier = portSupplier;
 
@@ -163,9 +172,12 @@ class CoreMqttJniClient implements IndividualMqttClient {
         String endpoint = endpointSupplier.get();
         int port = portSupplier.get();
         long bootstrapHandle = bootstrapSupplier.get().getNativeHandle();
-        long tlsCtxHandle = tlsContextSupplier.get().getNativeHandle();
+        String certPath = certPathSupplier.get();
+        String keyPath = keyPathSupplier.get();
+        String caPath = caPathSupplier.get();
 
-        CoreMqttNative.connect(nativeHandle, endpoint, port, bootstrapHandle, tlsCtxHandle, clientId);
+        CoreMqttNative.connect(nativeHandle, endpoint, port, bootstrapHandle,
+                certPath, keyPath, caPath, clientId);
         return connectFuture;
     }
 
@@ -174,18 +186,25 @@ class CoreMqttJniClient implements IndividualMqttClient {
         CompletableFuture<SubscribeResponse> future = new CompletableFuture<>();
         inprogressSubscriptions.incrementAndGet();
 
-        CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
-        CoreMqttNative.subscribe(nativeHandle, subscribe.getTopic(), subscribe.getQos().getValue(), nativeFuture);
-
-        nativeFuture.whenComplete((rc, error) -> {
-            inprogressSubscriptions.decrementAndGet();
-            if (error == null) {
-                subscriptionTopics.add(subscribe);
-                int reasonCode = (rc != null) ? rc : 0;
-                future.complete(new SubscribeResponse(null, reasonCode, null));
-            } else {
-                future.completeExceptionally(error);
+        connect().whenComplete((connResult, connError) -> {
+            if (connError != null) {
+                inprogressSubscriptions.decrementAndGet();
+                future.completeExceptionally(connError);
+                return;
             }
+            CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
+            CoreMqttNative.subscribe(nativeHandle, subscribe.getTopic(), subscribe.getQos().getValue(), nativeFuture);
+
+            nativeFuture.whenComplete((rc, error) -> {
+                inprogressSubscriptions.decrementAndGet();
+                if (error == null) {
+                    subscriptionTopics.add(subscribe);
+                    int reasonCode = (rc != null) ? rc : 0;
+                    future.complete(new SubscribeResponse(null, reasonCode, null));
+                } else {
+                    future.completeExceptionally(error);
+                }
+            });
         });
 
         return future;
@@ -195,16 +214,22 @@ class CoreMqttJniClient implements IndividualMqttClient {
     public CompletableFuture<UnsubscribeResponse> unsubscribe(String topic) {
         CompletableFuture<UnsubscribeResponse> future = new CompletableFuture<>();
 
-        CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
-        CoreMqttNative.unsubscribe(nativeHandle, topic, nativeFuture);
-
-        nativeFuture.whenComplete((rc, error) -> {
-            if (error == null) {
-                subscriptionTopics.removeIf(s -> s.getTopic().equals(topic));
-                future.complete(new UnsubscribeResponse(null, null, null));
-            } else {
-                future.completeExceptionally(error);
+        connect().whenComplete((connResult, connError) -> {
+            if (connError != null) {
+                future.completeExceptionally(connError);
+                return;
             }
+            CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
+            CoreMqttNative.unsubscribe(nativeHandle, topic, nativeFuture);
+
+            nativeFuture.whenComplete((rc, error) -> {
+                if (error == null) {
+                    subscriptionTopics.removeIf(s -> s.getTopic().equals(topic));
+                    future.complete(new UnsubscribeResponse(null, null, null));
+                } else {
+                    future.completeExceptionally(error);
+                }
+            });
         });
 
         return future;
@@ -216,18 +241,25 @@ class CoreMqttJniClient implements IndividualMqttClient {
         bandwidthLimiter.acquire(publish.getPayload() != null ? publish.getPayload().length : 0);
 
         CompletableFuture<PubAck> future = new CompletableFuture<>();
-        CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
-        CoreMqttNative.publish(nativeHandle, publish.getTopic(),
-                publish.getPayload() != null ? publish.getPayload() : new byte[0],
-                publish.getQos().getValue(), publish.isRetain(), nativeFuture);
 
-        nativeFuture.whenComplete((rc, error) -> {
-            if (error == null) {
-                int reasonCode = (rc != null) ? rc : 0;
-                future.complete(new PubAck(reasonCode, null, null));
-            } else {
-                future.completeExceptionally(error);
+        connect().whenComplete((connResult, connError) -> {
+            if (connError != null) {
+                future.completeExceptionally(connError);
+                return;
             }
+            CompletableFuture<Integer> nativeFuture = new CompletableFuture<>();
+            CoreMqttNative.publish(nativeHandle, publish.getTopic(),
+                    publish.getPayload() != null ? publish.getPayload() : new byte[0],
+                    publish.getQos().getValue(), publish.isRetain(), nativeFuture);
+
+            nativeFuture.whenComplete((rc, error) -> {
+                if (error == null) {
+                    int reasonCode = (rc != null) ? rc : 0;
+                    future.complete(new PubAck(reasonCode, null, null));
+                } else {
+                    future.completeExceptionally(error);
+                }
+            });
         });
 
         return future;

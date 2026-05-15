@@ -40,11 +40,14 @@ final class CoreMqttNative {
      * @param endpoint        IoT Core endpoint
      * @param port            port (typically 8883)
      * @param bootstrapHandle native handle to aws_client_bootstrap
-     * @param tlsCtxHandle    native handle to aws_tls_ctx
+     * @param certPath        path to client certificate PEM file
+     * @param keyPath         path to client private key PEM file
+     * @param caPath          path to root CA PEM file
      * @param clientId        MQTT client ID
      */
     static native void connect(long handle, String endpoint, int port,
-                               long bootstrapHandle, long tlsCtxHandle, String clientId);
+                               long bootstrapHandle, String certPath, String keyPath,
+                               String caPath, String clientId);
 
     /**
      * Send MQTT DISCONNECT and shut down the channel.

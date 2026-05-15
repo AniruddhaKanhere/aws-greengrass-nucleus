@@ -992,7 +992,9 @@ public class MqttClient implements Closeable {
                     this::getMessageHandlerForClient, clientId, clientIdNum, mqttTopics,
                     callbackEventManager, executorService, ses,
                     () -> clientBootstrap,
-                    () -> proxyTlsContext,
+                    () -> Coerce.toString(deviceConfiguration.getCertificateFilePath()),
+                    () -> Coerce.toString(deviceConfiguration.getPrivateKeyFilePath()),
+                    () -> Coerce.toString(deviceConfiguration.getRootCAFilePath()),
                     () -> Coerce.toString(deviceConfiguration.getIotDataEndpoint()),
                     () -> Coerce.toInt(mqttTopics.findOrDefault(DEFAULT_MQTT_PORT, MQTT_PORT_KEY)));
         }

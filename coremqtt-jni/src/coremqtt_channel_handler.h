@@ -11,6 +11,7 @@
 #include <aws/io/channel.h>
 #include <aws/io/channel_bootstrap.h>
 #include <aws/io/event_loop.h>
+#include <aws/io/host_resolver.h>
 #include <jni.h>
 
 #include "core_mqtt.h"
@@ -58,6 +59,12 @@ struct coremqtt_channel_handler {
     /* Connection state */
     bool is_connected;
     uint16_t keep_alive_sec;
+    char *client_id;
+
+    /* Our own CRT infrastructure (separate from Java CRT) */
+    struct aws_event_loop_group *event_loop_group;
+    struct aws_host_resolver *host_resolver;
+    struct aws_client_bootstrap *bootstrap;
 
     /* JNI callback references */
     JavaVM *jvm;
