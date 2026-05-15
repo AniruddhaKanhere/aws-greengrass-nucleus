@@ -58,6 +58,7 @@ struct coremqtt_channel_handler {
 
     /* Connection state */
     bool is_connected;
+    bool waiting_for_connack;
     uint16_t keep_alive_sec;
     char *client_id;
 

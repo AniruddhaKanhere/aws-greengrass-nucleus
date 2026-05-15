@@ -177,7 +177,6 @@ static int s_process_read_message(
             space = COREMQTT_RECV_BUFFER_SIZE - h->recv_write_pos;
         }
         if (incoming_len > space) {
-            /* Buffer overflow - shouldn't happen with 256KB buffer */
             aws_mem_release(message->allocator, message);
             return AWS_OP_ERR;
         }
@@ -189,7 +188,51 @@ static int s_process_read_message(
     aws_channel_slot_increment_read_window(slot, incoming_len);
     aws_mem_release(message->allocator, message);
 
-    /* Trigger coreMQTT to process the received data */
+    /* If waiting for CONNACK, check if we got it */
+    if (h->waiting_for_connack) {
+        /* CONNACK is: type byte (0x20) + remaining length + payload */
+        size_t available = h->recv_write_pos - h->recv_read_pos;
+        if (available >= 2) {
+            uint8_t *buf = h->recv_buffer_storage + h->recv_read_pos;
+            if ((buf[0] & 0xF0) == MQTT_PACKET_TYPE_CONNACK) {
+                /* Parse remaining length to know full packet size */
+                uint32_t rem_len = buf[1]; /* simplified: assumes 1-byte remaining length */
+                size_t packet_size = 2 + rem_len;
+                if (available >= packet_size) {
+                    /* We have the full CONNACK - consume it from buffer */
+                    h->recv_read_pos += packet_size;
+                    if (h->recv_read_pos == h->recv_write_pos) {
+                        h->recv_read_pos = 0;
+                        h->recv_write_pos = 0;
+                    }
+
+                    fprintf(stderr, "[coremqtt_jni] CONNACK received! (%zu bytes)\n", packet_size);
+                    h->waiting_for_connack = false;
+                    h->is_connected = true;
+                    h->mqtt_ctx.connectStatus = MQTTConnected;
+                    s_schedule_keepalive(h);
+
+                    /* Notify Java */
+                    if (h->java_callback != NULL) {
+                        JNIEnv *env = NULL;
+                        (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
+                        if (env) {
+                            (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid,
+                                                  (jboolean)false);
+                        }
+                    }
+                }
+            } else {
+                /* Not a CONNACK - server sent something unexpected, disconnect */
+                fprintf(stderr, "[coremqtt_jni] Expected CONNACK but got packet type 0x%02x\n", buf[0]);
+                h->waiting_for_connack = false;
+                aws_channel_shutdown(slot->channel, AWS_ERROR_INVALID_STATE);
+            }
+        }
+        return AWS_OP_SUCCESS;
+    }
+
+    /* Normal operation: trigger coreMQTT to process the data */
     MQTT_ProcessLoop(&h->mqtt_ctx);
 
     return AWS_OP_SUCCESS;
@@ -694,20 +737,9 @@ void coremqtt_on_channel_setup(
             fprintf(stderr, "[coremqtt_jni] CONNECT packet sent: %d bytes\n", sent);
 
             if (sent > 0) {
-                /* Mark as waiting for CONNACK - ProcessLoop will handle it */
-                h->mqtt_ctx.connectStatus = MQTTConnected; /* Allow ProcessLoop to run */
-                h->mqtt_ctx.keepAliveIntervalSec = h->keep_alive_sec;
-                h->is_connected = true;
-                s_schedule_keepalive(h);
-
-                if (h->java_callback != NULL) {
-                    JNIEnv *env = NULL;
-                    (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
-                    if (env) {
-                        (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_success_mid,
-                                              (jboolean)false);
-                    }
-                }
+                /* CONNECT sent - wait for CONNACK in s_process_read_message */
+                h->waiting_for_connack = true;
+                fprintf(stderr, "[coremqtt_jni] CONNECT sent, waiting for CONNACK\n");
             } else {
                 fprintf(stderr, "[coremqtt_jni] CONNECT send failed\n");
                 if (h->java_callback != NULL) {
