@@ -83,7 +83,11 @@ static int32_t s_transport_send(
 
     struct coremqtt_channel_handler *h = (struct coremqtt_channel_handler *)pNetworkContext;
 
+    fprintf(stderr, "[coremqtt_jni] transport_send: %zu bytes, slot=%p, channel=%p\n",
+            bytesToSend, (void*)h->slot, h->slot ? (void*)h->slot->channel : NULL);
+
     if (h->slot == NULL || h->slot->channel == NULL) {
+        fprintf(stderr, "[coremqtt_jni] transport_send: NO SLOT/CHANNEL!\n");
         return -1;
     }
 
@@ -107,6 +111,47 @@ static int32_t s_transport_send(
     return (int32_t)bytesToSend;
 }
 
+/* ─── Transport Interface: writev (sends all vectors in one channel message) ── */
+
+static int32_t s_transport_writev(
+    NetworkContext_t *pNetworkContext,
+    TransportOutVector_t *pIoVec,
+    size_t ioVecCount) {
+
+    struct coremqtt_channel_handler *h = (struct coremqtt_channel_handler *)pNetworkContext;
+
+    if (h->slot == NULL || h->slot->channel == NULL) {
+        return -1;
+    }
+
+    /* Calculate total size */
+    size_t total = 0;
+    for (size_t i = 0; i < ioVecCount; i++) {
+        total += pIoVec[i].iov_len;
+    }
+
+    struct aws_io_message *msg = aws_channel_acquire_message_from_pool(
+        h->slot->channel, AWS_IO_MESSAGE_APPLICATION_DATA, total);
+    if (msg == NULL) {
+        return -1;
+    }
+
+    /* Copy all vectors into one message */
+    for (size_t i = 0; i < ioVecCount; i++) {
+        struct aws_byte_cursor data = aws_byte_cursor_from_array(pIoVec[i].iov_base, pIoVec[i].iov_len);
+        aws_byte_buf_write_from_whole_cursor(&msg->message_data, data);
+    }
+
+    fprintf(stderr, "[coremqtt_jni] transport_writev: %zu bytes in %zu vectors\n", total, ioVecCount);
+
+    if (aws_channel_slot_send_message(h->slot, msg, AWS_CHANNEL_DIR_WRITE)) {
+        aws_mem_release(msg->allocator, msg);
+        return -1;
+    }
+
+    return (int32_t)total;
+}
+
 /* ─── Channel handler vtable implementations ──────────────────────────── */
 
 static int s_process_read_message(
@@ -115,6 +160,8 @@ static int s_process_read_message(
     struct aws_io_message *message) {
 
     struct coremqtt_channel_handler *h = handler->impl;
+
+    fprintf(stderr, "[coremqtt_jni] s_process_read_message: received %zu bytes\n", message->message_data.len);
 
     /* Append decrypted bytes to recv ring buffer */
     size_t incoming_len = message->message_data.len;
@@ -161,7 +208,7 @@ static int s_shutdown(
 
 static size_t s_initial_window_size(struct aws_channel_handler *handler) {
     (void)handler;
-    return COREMQTT_RECV_BUFFER_SIZE;
+    return SIZE_MAX;
 }
 
 static size_t s_message_overhead(struct aws_channel_handler *handler) {
@@ -615,6 +662,9 @@ void coremqtt_on_channel_setup(
     aws_channel_slot_set_handler(h->slot, &h->base);
     h->loop = aws_channel_get_event_loop(channel);
 
+    fprintf(stderr, "[coremqtt_jni] Handler installed. slot=%p, adj_left=%p, adj_right=%p\n",
+            (void*)h->slot, (void*)h->slot->adj_left, (void*)h->slot->adj_right);
+
     /* Send MQTT CONNECT packet with timeout=0 (non-blocking, just sends the packet) */
     MQTTConnectInfo_t connect_info = {
         .cleanSession = false, /* persistent session */
@@ -723,7 +773,7 @@ struct coremqtt_channel_handler *coremqtt_channel_handler_new(
     TransportInterface_t transport = {
         .recv = s_transport_recv,
         .send = s_transport_send,
-        .writev = NULL,
+        .writev = s_transport_writev,
         .pNetworkContext = (NetworkContext_t *)h,
     };
 
