@@ -252,6 +252,9 @@ static int s_process_read_message(
     }
 
     /* Normal operation: trigger coreMQTT to process the data */
+    if (!h->is_connected) {
+        return AWS_OP_SUCCESS; /* Ignore data on disconnected/failed connections */
+    }
     MQTTStatus_t mqtt_status = MQTT_ProcessLoop(&h->mqtt_ctx);
     if (mqtt_status == MQTTBadResponse) {
         /* Dump what's in the network buffer for debugging */
@@ -362,6 +365,8 @@ static bool s_mqtt_event_callback(
     uint16_t packet_id = pDeserializedInfo->packetIdentifier;
     uint8_t packet_type = pPacketInfo->type & 0xF0U;
 
+    fprintf(stderr, "[coremqtt_jni] event_callback: type=0x%02x, packetId=%u\n", packet_type, packet_id);
+
     switch (packet_type) {
         case MQTT_PACKET_TYPE_PUBACK:
         case MQTT_PACKET_TYPE_SUBACK:
@@ -370,6 +375,8 @@ static bool s_mqtt_event_callback(
             struct aws_hash_element *elem = NULL;
             uint64_t key = (uint64_t)packet_id;
             aws_hash_table_find(&h->pending_acks, (void *)key, &elem);
+            fprintf(stderr, "[coremqtt_jni] ACK lookup: packetId=%u, key=%llu, found=%d\n",
+                    packet_id, (unsigned long long)key, (elem != NULL && elem->value != NULL));
             if (elem != NULL && elem->value != NULL) {
                 struct pending_ack_data *ack_data = elem->value;
                 int rc = 0;
@@ -724,6 +731,8 @@ void coremqtt_on_channel_setup(
 
     /* Reset state from any previous connection attempt */
     h->mqtt_ctx.index = 0;
+    h->mqtt_ctx.connectStatus = MQTTNotConnected;
+    memset(h->network_buffer, 0, COREMQTT_NETWORK_BUFFER_SIZE);
     h->recv_read_pos = 0;
     h->recv_write_pos = 0;
 
