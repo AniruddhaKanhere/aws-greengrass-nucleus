@@ -18,6 +18,8 @@ static int s_process_read_message(
     struct aws_channel_slot *slot,
     struct aws_io_message *message);
 
+static void s_schedule_keepalive(struct coremqtt_channel_handler *h);
+
 static int s_shutdown(
     struct aws_channel_handler *handler,
     struct aws_channel_slot *slot,
@@ -210,6 +212,10 @@ static int s_process_read_message(
                     h->waiting_for_connack = false;
                     h->is_connected = true;
                     h->mqtt_ctx.connectStatus = MQTTConnected;
+                    h->mqtt_ctx.index = 0; /* Reset parser state for clean ProcessLoop */
+                    h->mqtt_ctx.keepAliveIntervalSec = h->keep_alive_sec;
+                    h->mqtt_ctx.connectionProperties.serverMaxPacketSize = 268435460U; /* MQTT max */
+                    h->mqtt_ctx.connectionProperties.maxPacketSize = COREMQTT_NETWORK_BUFFER_SIZE;
                     s_schedule_keepalive(h);
 
                     /* Notify Java */
@@ -222,6 +228,18 @@ static int s_process_read_message(
                         }
                     }
                 }
+            } else if ((buf[0] & 0xF0) == MQTT_PACKET_TYPE_DISCONNECT) {
+                /* Server sent DISCONNECT instead of CONNACK */
+                fprintf(stderr, "[coremqtt_jni] Got DISCONNECT while waiting for CONNACK\n");
+                h->waiting_for_connack = false;
+                if (h->java_callback != NULL) {
+                    JNIEnv *env = NULL;
+                    (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
+                    if (env) {
+                        (*env)->CallVoidMethod(env, h->java_callback, h->on_connection_failure_mid, (jint)142);
+                    }
+                }
+                aws_channel_shutdown(slot->channel, AWS_ERROR_INVALID_STATE);
             } else {
                 /* Not a CONNACK - server sent something unexpected, disconnect */
                 fprintf(stderr, "[coremqtt_jni] Expected CONNACK but got packet type 0x%02x\n", buf[0]);
@@ -233,7 +251,16 @@ static int s_process_read_message(
     }
 
     /* Normal operation: trigger coreMQTT to process the data */
-    MQTT_ProcessLoop(&h->mqtt_ctx);
+    MQTTStatus_t mqtt_status = MQTT_ProcessLoop(&h->mqtt_ctx);
+    if (mqtt_status == MQTTBadResponse) {
+        /* Bad response often means server sent DISCONNECT - reset buffer and continue */
+        fprintf(stderr, "[coremqtt_jni] ProcessLoop: MQTTBadResponse, resetting buffer\n");
+        h->recv_read_pos = 0;
+        h->recv_write_pos = 0;
+        h->mqtt_ctx.index = 0;
+    } else if (mqtt_status != MQTTSuccess && mqtt_status != MQTTNeedMoreBytes && mqtt_status != MQTTNoDataAvailable) {
+        fprintf(stderr, "[coremqtt_jni] ProcessLoop returned error: %d\n", (int)mqtt_status);
+    }
 
     return AWS_OP_SUCCESS;
 }
