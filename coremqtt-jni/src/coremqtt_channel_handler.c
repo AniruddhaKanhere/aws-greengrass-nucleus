@@ -208,7 +208,8 @@ static int s_process_read_message(
                         h->recv_write_pos = 0;
                     }
 
-                    fprintf(stderr, "[coremqtt_jni] CONNACK received! (%zu bytes)\n", packet_size);
+                    fprintf(stderr, "[coremqtt_jni] CONNACK received! (%zu bytes), ring buffer: read_pos=%zu write_pos=%zu\n",
+                            packet_size, h->recv_read_pos, h->recv_write_pos);
                     h->waiting_for_connack = false;
                     h->is_connected = true;
                     h->mqtt_ctx.connectStatus = MQTTConnected;
@@ -253,8 +254,15 @@ static int s_process_read_message(
     /* Normal operation: trigger coreMQTT to process the data */
     MQTTStatus_t mqtt_status = MQTT_ProcessLoop(&h->mqtt_ctx);
     if (mqtt_status == MQTTBadResponse) {
-        /* Bad response often means server sent DISCONNECT - reset buffer and continue */
-        fprintf(stderr, "[coremqtt_jni] ProcessLoop: MQTTBadResponse, resetting buffer\n");
+        /* Dump what's in the network buffer for debugging */
+        fprintf(stderr, "[coremqtt_jni] ProcessLoop: MQTTBadResponse. networkBuffer index=%zu, first bytes: ",
+                h->mqtt_ctx.index);
+        size_t dump_len = h->mqtt_ctx.index < 16 ? h->mqtt_ctx.index : 16;
+        for (size_t i = 0; i < dump_len; i++) {
+            fprintf(stderr, "%02x ", h->mqtt_ctx.networkBuffer.pBuffer[i]);
+        }
+        fprintf(stderr, "\n");
+        /* Reset buffer and continue */
         h->recv_read_pos = 0;
         h->recv_write_pos = 0;
         h->mqtt_ctx.index = 0;
@@ -713,6 +721,11 @@ void coremqtt_on_channel_setup(
 
     fprintf(stderr, "[coremqtt_jni] channel_setup callback: error_code=%d, channel=%p\n",
             error_code, (void*)channel);
+
+    /* Reset state from any previous connection attempt */
+    h->mqtt_ctx.index = 0;
+    h->recv_read_pos = 0;
+    h->recv_write_pos = 0;
 
     if (error_code != 0 || channel == NULL) {
         fprintf(stderr, "[coremqtt_jni] channel_setup FAILED: error=%d\n", error_code);

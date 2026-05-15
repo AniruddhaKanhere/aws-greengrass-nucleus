@@ -36,10 +36,17 @@
 #define MQTT_PRE_STATE_UPDATE_HOOK( pContext )   /* single-threaded, no-op */
 #define MQTT_POST_STATE_UPDATE_HOOK( pContext )  /* single-threaded, no-op */
 
-/* Logging - disabled for PoC build. coreMQTT uses double-parenthesis style:
- * LogError( ( "format %d", arg ) ) which requires custom printf-like macros. */
-#define LogError( message )
-#define LogWarn( message )
+/* Logging - enabled for debugging.
+ * coreMQTT uses: LogError( ( "fmt %d", arg ) ) - double parens.
+ * Expansion: LogError( (args) ) -> fprintf(stderr, args); fprintf(stderr, "\n")
+ * The trick: `fprintf(stderr, ("fmt", arg))` doesn't work, but
+ * `fprintf(stderr, ##args)` with the parens stripped does.
+ * Correct pattern: #define LogX(message) printf message  */
+#include <stdio.h>
+/* coreMQTT logging: LogError( ( "fmt %d", arg ) ) expands the inner parens as printf args */
+#define LOG_TO_STDERR(...) fprintf(stderr, __VA_ARGS__)
+#define LogError( message )    do { fprintf(stderr, "[coreMQTT ERROR] "); LOG_TO_STDERR message; fprintf(stderr, "\n"); fflush(stderr); } while(0)
+#define LogWarn( message )     do { fprintf(stderr, "[coreMQTT WARN]  "); LOG_TO_STDERR message; fprintf(stderr, "\n"); } while(0)
 #define LogInfo( message )
 #define LogDebug( message )
 #define LogTrace( message )
