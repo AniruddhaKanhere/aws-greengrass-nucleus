@@ -164,6 +164,9 @@ class CoreMqttJniClient implements IndividualMqttClient {
 
     @Override
     public CompletableFuture<?> connect() {
+        if (connected()) {
+            return CompletableFuture.completedFuture(null);
+        }
         if (connectFuture != null && !connectFuture.isDone()) {
             return connectFuture;
         }

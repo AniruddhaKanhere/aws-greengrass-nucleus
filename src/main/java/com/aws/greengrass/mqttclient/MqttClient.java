@@ -876,6 +876,10 @@ public class MqttClient implements Closeable {
             // If we have no connections, or our connections are over-subscribed, create a new connection
             if (connections.isEmpty() || forSubscription && connections.stream()
                     .noneMatch(IndividualMqttClient::canAddNewSubscription)) {
+                logger.atWarn().kv("connectionsSize", connections.size())
+                        .kv("forSubscription", forSubscription)
+                        .kv("activeClientIds", activeClientIds)
+                        .log("Creating new MQTT connection");
                 IndividualMqttClient conn = getNewMqttClient();
                 activeClientIds.add(conn.getClientIdNum());
                 connections.add(conn);
