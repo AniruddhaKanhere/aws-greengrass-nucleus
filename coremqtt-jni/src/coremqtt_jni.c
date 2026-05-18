@@ -25,17 +25,6 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     return JNI_VERSION_1_6;
 }
 
-/* Helper: get C string from jstring (caller must free) */
-static char *s_jstring_to_cstr(JNIEnv *env, jstring jstr, struct aws_allocator *alloc) {
-    if (jstr == NULL) return NULL;
-    const char *utf = (*env)->GetStringUTFChars(env, jstr, NULL);
-    size_t len = strlen(utf);
-    char *copy = aws_mem_calloc(alloc, 1, len + 1);
-    memcpy(copy, utf, len + 1);
-    (*env)->ReleaseStringUTFChars(env, jstr, utf);
-    return copy;
-}
-
 /*
  * Class:     com_aws_greengrass_mqttclient_CoreMqttNative
  * Method:    create
