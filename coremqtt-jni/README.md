@@ -1,6 +1,67 @@
-# coreMQTT PoC Implementation Guide
+# coreMQTT PoC — Replace aws-c-mqtt in Greengrass Nucleus
 
-## Result
+## Quick Start
+
+### Prerequisites
+- Podman or Docker
+- AWS CLI configured with IoT permissions
+- An IoT thing with certificate, private key, and policy allowing `iot:Connect`, `iot:Publish`, `iot:Subscribe`, `iot:Receive` on `*`
+
+### 1. Clone and init submodules
+```bash
+git clone --branch feature/coremqtt-poc https://github.com/AniruddhaKanhere/aws-greengrass-nucleus.git
+cd aws-greengrass-nucleus
+git submodule update --init --recursive
+```
+
+### 2. Set up device config
+```bash
+cp coremqtt-jni/config.yaml.example config.yaml
+# Edit config.yaml: set thingName, region, iotDataEndpoint
+```
+
+### 3. Place certs
+```bash
+mkdir certs/
+# Copy your certificate.pem.crt, private.pem.key, AmazonRootCA1.pem into certs/
+```
+
+### 4. Build
+```bash
+cd coremqtt-jni
+podman build -t gg-coremqtt .
+```
+
+### 5. Run
+```bash
+podman run -d --name gg-coremqtt \
+  -v $(pwd)/../config.yaml:/greengrass/config/config.yaml:ro \
+  -v $(pwd)/../certs:/greengrass/certs:ro \
+  gg-coremqtt
+```
+
+### 6. Verify
+```bash
+# Check device registered
+aws greengrassv2 get-core-device --core-device-thing-name <YOUR_THING> --region <YOUR_REGION>
+
+# Deploy the demo publisher component
+aws greengrassv2 create-component-version --inline-recipe fileb://publisher-component-recipe.json --region <YOUR_REGION>
+aws greengrassv2 create-deployment \
+  --target-arn "arn:aws:iot:<REGION>:<ACCOUNT>:thing/<THING>" \
+  --components '{"com.example.CoreMQTTPublisher":{"componentVersion":"1.1.0"}}' \
+  --region <YOUR_REGION>
+
+# Watch messages arrive on IoT Core MQTT test client: topic gg/coremqtt/hello
+```
+
+> **Note:** The container needs `python3` and `awsiotsdk==1.19.0` pre-installed for the publisher component. The Dockerfile includes these.
+
+---
+
+## Implementation Guide
+
+### Result
 Greengrass nucleus running with coreMQTT (replacing aws-c-mqtt) registers as a **HEALTHY** core device on AWS IoT Core. All MQTT operations (connect, subscribe, publish) work through the aws-c-io channel pipeline with coreMQTT handling the MQTT5 protocol.
 
 ---
