@@ -100,7 +100,6 @@ JNIEXPORT void JNICALL Java_com_aws_greengrass_mqttclient_CoreMqttNative_destroy
  * Initiates TCP+TLS connection via aws-c-io bootstrap, then sends MQTT CONNECT.
  */
 JNIEXPORT void JNICALL
-__attribute__((optimize("O0")))
 Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     JNIEnv *env,
     jclass cls,
@@ -116,13 +115,6 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     (void)cls;
     struct aws_allocator *alloc = aws_default_allocator();
     struct coremqtt_channel_handler *handler = (struct coremqtt_channel_handler *)(uintptr_t)handle;
-
-    /* Ensure CRT is initialized (must happen before any aws-c-io call) */
-    /* Use volatile to prevent compiler from optimizing these away */
-    void (*volatile init_common)(struct aws_allocator *) = aws_common_library_init;
-    void (*volatile init_io)(struct aws_allocator *) = aws_io_library_init;
-    init_common(alloc);
-    init_io(alloc);
 
     const char *endpoint = (*env)->GetStringUTFChars(env, jendpoint, NULL);
     const char *cert_path = (*env)->GetStringUTFChars(env, jcert_path, NULL);
