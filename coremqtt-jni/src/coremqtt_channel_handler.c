@@ -85,11 +85,9 @@ static int32_t s_transport_send(
 
     struct coremqtt_channel_handler *h = (struct coremqtt_channel_handler *)pNetworkContext;
 
-    fprintf(stderr, "[coremqtt_jni] transport_send: %zu bytes, slot=%p, channel=%p\n",
             bytesToSend, (void*)h->slot, h->slot ? (void*)h->slot->channel : NULL);
 
     if (h->slot == NULL || h->slot->channel == NULL) {
-        fprintf(stderr, "[coremqtt_jni] transport_send: NO SLOT/CHANNEL!\n");
         return -1;
     }
 
@@ -144,7 +142,6 @@ static int32_t s_transport_writev(
         aws_byte_buf_write_from_whole_cursor(&msg->message_data, data);
     }
 
-    fprintf(stderr, "[coremqtt_jni] transport_writev: %zu bytes in %zu vectors\n", total, ioVecCount);
 
     if (aws_channel_slot_send_message(h->slot, msg, AWS_CHANNEL_DIR_WRITE)) {
         aws_mem_release(msg->allocator, msg);
@@ -163,7 +160,6 @@ static int s_process_read_message(
 
     struct coremqtt_channel_handler *h = handler->impl;
 
-    fprintf(stderr, "[coremqtt_jni] s_process_read_message: received %zu bytes\n", message->message_data.len);
 
     /* Append decrypted bytes to recv ring buffer */
     size_t incoming_len = message->message_data.len;
@@ -208,7 +204,6 @@ static int s_process_read_message(
                         h->recv_write_pos = 0;
                     }
 
-                    fprintf(stderr, "[coremqtt_jni] CONNACK received! (%zu bytes), ring buffer: read_pos=%zu write_pos=%zu\n",
                             packet_size, h->recv_read_pos, h->recv_write_pos);
                     h->waiting_for_connack = false;
                     h->is_connected = true;
@@ -231,7 +226,6 @@ static int s_process_read_message(
                 }
             } else if ((buf[0] & 0xF0) == MQTT_PACKET_TYPE_DISCONNECT) {
                 /* Server sent DISCONNECT instead of CONNACK */
-                fprintf(stderr, "[coremqtt_jni] Got DISCONNECT while waiting for CONNACK\n");
                 h->waiting_for_connack = false;
                 if (h->java_callback != NULL) {
                     JNIEnv *env = NULL;
@@ -243,7 +237,6 @@ static int s_process_read_message(
                 aws_channel_shutdown(slot->channel, AWS_ERROR_INVALID_STATE);
             } else {
                 /* Not a CONNACK - server sent something unexpected, disconnect */
-                fprintf(stderr, "[coremqtt_jni] Expected CONNACK but got packet type 0x%02x\n", buf[0]);
                 h->waiting_for_connack = false;
                 aws_channel_shutdown(slot->channel, AWS_ERROR_INVALID_STATE);
             }
@@ -257,20 +250,10 @@ static int s_process_read_message(
     }
     MQTTStatus_t mqtt_status = MQTT_ProcessLoop(&h->mqtt_ctx);
     if (mqtt_status == MQTTBadResponse) {
-        /* Dump what's in the network buffer for debugging */
-        fprintf(stderr, "[coremqtt_jni] ProcessLoop: MQTTBadResponse. networkBuffer index=%zu, first bytes: ",
-                h->mqtt_ctx.index);
-        size_t dump_len = h->mqtt_ctx.index < 16 ? h->mqtt_ctx.index : 16;
-        for (size_t i = 0; i < dump_len; i++) {
-            fprintf(stderr, "%02x ", h->mqtt_ctx.networkBuffer.pBuffer[i]);
-        }
-        fprintf(stderr, "\n");
         /* Reset buffer and continue */
         h->recv_read_pos = 0;
         h->recv_write_pos = 0;
         h->mqtt_ctx.index = 0;
-    } else if (mqtt_status != MQTTSuccess && mqtt_status != MQTTNeedMoreBytes && mqtt_status != MQTTNoDataAvailable) {
-        fprintf(stderr, "[coremqtt_jni] ProcessLoop returned error: %d\n", (int)mqtt_status);
     }
 
     return AWS_OP_SUCCESS;
@@ -365,7 +348,6 @@ static bool s_mqtt_event_callback(
     uint16_t packet_id = pDeserializedInfo->packetIdentifier;
     uint8_t packet_type = pPacketInfo->type & 0xF0U;
 
-    fprintf(stderr, "[coremqtt_jni] event_callback: type=0x%02x, packetId=%u\n", packet_type, packet_id);
 
     switch (packet_type) {
         case MQTT_PACKET_TYPE_PUBACK:
@@ -375,7 +357,6 @@ static bool s_mqtt_event_callback(
             struct aws_hash_element *elem = NULL;
             uint64_t key = (uint64_t)packet_id;
             aws_hash_table_find(&h->pending_acks, (void *)key, &elem);
-            fprintf(stderr, "[coremqtt_jni] ACK lookup: packetId=%u, key=%llu, found=%d\n",
                     packet_id, (unsigned long long)key, (elem != NULL && elem->value != NULL));
             if (elem != NULL && elem->value != NULL) {
                 struct pending_ack_data *ack_data = elem->value;
@@ -383,14 +364,11 @@ static bool s_mqtt_event_callback(
                 if (pDeserializedInfo->pReasonCode != NULL) {
                     rc = (int)pDeserializedInfo->pReasonCode->reasonCode[0];
                 }
-                fprintf(stderr, "[coremqtt_jni] Completing future for packetId=%u with rc=%d\n", packet_id, rc);
                 s_complete_java_future(h->jvm, ack_data->java_future, rc, true);
-                fprintf(stderr, "[coremqtt_jni] Future completed for packetId=%u\n", packet_id);
                 JNIEnv *env = NULL;
                 (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
                 if (env) {
                     if ((*env)->ExceptionCheck(env)) {
-                        fprintf(stderr, "[coremqtt_jni] JNI EXCEPTION after completing future!\n");
                         (*env)->ExceptionDescribe(env);
                         (*env)->ExceptionClear(env);
                     }
@@ -733,7 +711,6 @@ void coremqtt_on_channel_setup(
     (void)bootstrap;
     struct coremqtt_channel_handler *h = user_data;
 
-    fprintf(stderr, "[coremqtt_jni] channel_setup callback: error_code=%d, channel=%p\n",
             error_code, (void*)channel);
 
     /* Reset state from any previous connection attempt */
@@ -744,7 +721,6 @@ void coremqtt_on_channel_setup(
     h->recv_write_pos = 0;
 
     if (error_code != 0 || channel == NULL) {
-        fprintf(stderr, "[coremqtt_jni] channel_setup FAILED: error=%d\n", error_code);
         if (h->java_callback != NULL) {
             JNIEnv *env = NULL;
             (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
@@ -761,7 +737,6 @@ void coremqtt_on_channel_setup(
     aws_channel_slot_set_handler(h->slot, &h->base);
     h->loop = aws_channel_get_event_loop(channel);
 
-    fprintf(stderr, "[coremqtt_jni] Handler installed. slot=%p, adj_left=%p, adj_right=%p\n",
             (void*)h->slot, (void*)h->slot->adj_left, (void*)h->slot->adj_right);
 
     /* Send MQTT CONNECT packet using serializer (non-blocking, no waiting for CONNACK) */
@@ -777,7 +752,6 @@ void coremqtt_on_channel_setup(
     size_t packet_size = 0;
     MQTTStatus_t status = MQTT_GetConnectPacketSize(&connect_info, NULL, NULL, NULL,
                                                      &remaining_length, &packet_size);
-    fprintf(stderr, "[coremqtt_jni] MQTT_GetConnectPacketSize: status=%d, size=%zu\n", (int)status, packet_size);
 
     if (status == MQTTSuccess) {
         /* Serialize into a temporary buffer */
@@ -785,19 +759,15 @@ void coremqtt_on_channel_setup(
         MQTTFixedBuffer_t fixed_buf = { .pBuffer = connect_buf, .size = sizeof(connect_buf) };
         status = MQTT_SerializeConnect(&connect_info, NULL, NULL, NULL,
                                         remaining_length, &fixed_buf);
-        fprintf(stderr, "[coremqtt_jni] MQTT_SerializeConnect: status=%d, len=%zu\n", (int)status, fixed_buf.size);
 
         if (status == MQTTSuccess) {
             /* Send via transport */
             int32_t sent = s_transport_send((NetworkContext_t *)h, connect_buf, packet_size);
-            fprintf(stderr, "[coremqtt_jni] CONNECT packet sent: %d bytes\n", sent);
 
             if (sent > 0) {
                 /* CONNECT sent - wait for CONNACK in s_process_read_message */
                 h->waiting_for_connack = true;
-                fprintf(stderr, "[coremqtt_jni] CONNECT sent, waiting for CONNACK\n");
             } else {
-                fprintf(stderr, "[coremqtt_jni] CONNECT send failed\n");
                 if (h->java_callback != NULL) {
                     JNIEnv *env = NULL;
                     (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
@@ -809,7 +779,6 @@ void coremqtt_on_channel_setup(
             }
         }
     } else {
-        fprintf(stderr, "[coremqtt_jni] GetConnectPacketSize failed: %d\n", (int)status);
         if (h->java_callback != NULL) {
             JNIEnv *env = NULL;
             (*h->jvm)->AttachCurrentThread(h->jvm, (void **)&env, NULL);
