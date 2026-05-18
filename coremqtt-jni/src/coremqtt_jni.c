@@ -123,7 +123,6 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     struct aws_tls_ctx_options tls_ctx_options;
     AWS_ZERO_STRUCT(tls_ctx_options);
     if (aws_tls_ctx_options_init_client_mtls_from_path(&tls_ctx_options, alloc, cert_path, key_path)) {
-                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());
@@ -131,7 +130,6 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
         goto cleanup;
     }
     if (aws_tls_ctx_options_override_default_trust_store_from_path(&tls_ctx_options, NULL, ca_path)) {
-                aws_last_error(), aws_error_name(aws_last_error()));
         aws_tls_ctx_options_clean_up(&tls_ctx_options);
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
@@ -144,7 +142,6 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     aws_tls_ctx_options_clean_up(&tls_ctx_options);
 
     if (tls_ctx == NULL) {
-                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());
@@ -179,9 +176,7 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     };
 
     int result = aws_client_bootstrap_new_socket_channel(&channel_options);
-            result, endpoint, (int)port);
     if (result != AWS_OP_SUCCESS) {
-                aws_last_error(), aws_error_name(aws_last_error()));
         if (handler->java_callback) {
             (*env)->CallVoidMethod(env, handler->java_callback,
                                    handler->on_connection_failure_mid, (jint)aws_last_error());

@@ -85,7 +85,6 @@ static int32_t s_transport_send(
 
     struct coremqtt_channel_handler *h = (struct coremqtt_channel_handler *)pNetworkContext;
 
-            bytesToSend, (void*)h->slot, h->slot ? (void*)h->slot->channel : NULL);
 
     if (h->slot == NULL || h->slot->channel == NULL) {
         return -1;
@@ -204,7 +203,6 @@ static int s_process_read_message(
                         h->recv_write_pos = 0;
                     }
 
-                            packet_size, h->recv_read_pos, h->recv_write_pos);
                     h->waiting_for_connack = false;
                     h->is_connected = true;
                     h->mqtt_ctx.connectStatus = MQTTConnected;
@@ -357,7 +355,6 @@ static bool s_mqtt_event_callback(
             struct aws_hash_element *elem = NULL;
             uint64_t key = (uint64_t)packet_id;
             aws_hash_table_find(&h->pending_acks, (void *)key, &elem);
-                    packet_id, (unsigned long long)key, (elem != NULL && elem->value != NULL));
             if (elem != NULL && elem->value != NULL) {
                 struct pending_ack_data *ack_data = elem->value;
                 int rc = 0;
@@ -711,8 +708,6 @@ void coremqtt_on_channel_setup(
     (void)bootstrap;
     struct coremqtt_channel_handler *h = user_data;
 
-            error_code, (void*)channel);
-
     /* Reset state from any previous connection attempt */
     h->mqtt_ctx.index = 0;
     h->mqtt_ctx.connectStatus = MQTTNotConnected;
@@ -737,7 +732,6 @@ void coremqtt_on_channel_setup(
     aws_channel_slot_set_handler(h->slot, &h->base);
     h->loop = aws_channel_get_event_loop(channel);
 
-            (void*)h->slot, (void*)h->slot->adj_left, (void*)h->slot->adj_right);
 
     /* Send MQTT CONNECT packet using serializer (non-blocking, no waiting for CONNACK) */
     MQTTConnectInfo_t connect_info = {
