@@ -106,7 +106,6 @@ Java_com_aws_greengrass_mqttclient_CoreMqttNative_connect(
     jlong handle,
     jstring jendpoint,
     jint port,
-    jlong bootstrap_handle,
     jstring jcert_path,
     jstring jkey_path,
     jstring jca_path,

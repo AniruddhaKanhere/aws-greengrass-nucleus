@@ -16,7 +16,6 @@ import com.aws.greengrass.mqttclient.v5.SubscribeResponse;
 import com.aws.greengrass.mqttclient.v5.UnsubscribeResponse;
 import com.aws.greengrass.util.Coerce;
 import lombok.Getter;
-import software.amazon.awssdk.crt.io.ClientBootstrap;
 import vendored.com.google.common.util.concurrent.RateLimiter;
 
 import java.time.Duration;
@@ -62,7 +61,6 @@ class CoreMqttJniClient implements IndividualMqttClient {
     private final ExecutorService executorService;
     private final ScheduledExecutorService ses;
     private final Consumer<Publish> messageHandler;
-    private final Supplier<ClientBootstrap> bootstrapSupplier;
     private final Supplier<String> certPathSupplier;
     private final Supplier<String> keyPathSupplier;
     private final Supplier<String> caPathSupplier;
@@ -134,7 +132,6 @@ class CoreMqttJniClient implements IndividualMqttClient {
             CallbackEventManager callbackEventManager,
             ExecutorService executorService,
             ScheduledExecutorService ses,
-            Supplier<ClientBootstrap> bootstrapSupplier,
             Supplier<String> certPathSupplier,
             Supplier<String> keyPathSupplier,
             Supplier<String> caPathSupplier,
@@ -148,7 +145,6 @@ class CoreMqttJniClient implements IndividualMqttClient {
         this.executorService = executorService;
         this.ses = ses;
         this.messageHandler = messageHandlerFactory.apply(this);
-        this.bootstrapSupplier = bootstrapSupplier;
         this.certPathSupplier = certPathSupplier;
         this.keyPathSupplier = keyPathSupplier;
         this.caPathSupplier = caPathSupplier;
@@ -174,12 +170,11 @@ class CoreMqttJniClient implements IndividualMqttClient {
 
         String endpoint = endpointSupplier.get();
         int port = portSupplier.get();
-        long bootstrapHandle = bootstrapSupplier.get().getNativeHandle();
         String certPath = certPathSupplier.get();
         String keyPath = keyPathSupplier.get();
         String caPath = caPathSupplier.get();
 
-        CoreMqttNative.connect(nativeHandle, endpoint, port, bootstrapHandle,
+        CoreMqttNative.connect(nativeHandle, endpoint, port,
                 certPath, keyPath, caPath, clientId);
         return connectFuture;
     }

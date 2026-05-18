@@ -995,7 +995,6 @@ public class MqttClient implements Closeable {
             return new CoreMqttJniClient(
                     this::getMessageHandlerForClient, clientId, clientIdNum, mqttTopics,
                     callbackEventManager, executorService, ses,
-                    () -> clientBootstrap,
                     () -> Coerce.toString(deviceConfiguration.getCertificateFilePath()),
                     () -> Coerce.toString(deviceConfiguration.getPrivateKeyFilePath()),
                     () -> Coerce.toString(deviceConfiguration.getRootCAFilePath()),
